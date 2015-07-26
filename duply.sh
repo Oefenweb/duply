@@ -38,8 +38,14 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  1.5.6 (24.5.2012)
+#  - commands purge, purge-full have no default value anymore for security 
+#    reasons; instead max value can be given via cmd line or must be set
+#    in profile; else an error is shown.
+#  - minor man page modifications
+#
 #  versioning scheme will be simplified to [major].[minor].[patch] version
-#  with the next minor version raise
+#  with the next version raise
 #
 #  1.5.5.5 (4.2.2012)
 #  - bugfix 3479605: SEL context confused profile folder's permission check
@@ -284,7 +290,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.5.5"
+ME_VERSION="1.5.6"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -397,14 +403,14 @@ USAGE:
   All conf parameters can also be defined in the environment instead.
 
 PROFILE:
-  Indicated by a profile name (<profile>), which is resolved 
+  Indicated by a path or a profile name (<profile>), which is resolved 
   to '~/.${ME_NAME}/<profile>' (~ expands to environment variable \$HOME).
 
-  Superuser root can place profiles under '/etc/${ME_NAME}' if the
-  folder is manually created before running $ME.
-  Hint:  
-    If '/etc/${ME_NAME}' is created later, already existing profiles in the 
-    user dir have to be moved manually or will cease to work.
+  Superuser root can place profiles under '/etc/${ME_NAME}'. Simply create
+  the folder manually before running $ME as superuser.
+  Note:  
+    Already existing profiles in root's profile folder will cease to work
+    unless there are moved to the new location manually.
 
   example 1:   $ME humbug backup
 
@@ -431,25 +437,26 @@ COMMANDS:
              list all files in backup (as it was at <age>, default: now)
   status     prints backup sets and chains currently in repository
   verify     list files changed since latest backup
-  purge [--force]  
-             shows outdated backup archives (older than \$MAX_AGE)
-              [actually delete these files]
-  purge-full [--force]  
-             shows outdated backups (more than \$MAX_FULL_BACKUPS, 
-             the number of 'recent' full backups and associated 
-             incrementals to keep) [actually delete these files]
-  cleanup [--force]  
-             shows broken backup archives (e.g. after unfinished run)
-              [actually delete these files]
   restore <target_path> [<age>]  
-             restore the backup to <target_path> [as it was at <age>]
+             restore the complete backup to <target_path> [as it was at <age>]
   fetch <src_path> <target_path> [<age>]  
-             restore single file/folder from backup [as it was at <age>]
+             fetch single file/folder from backup [as it was at <age>]
+  purge [<max_age>] [--force]  
+             list outdated backup files (older than \$MAX_AGE)
+              [use --force to actually delete these files]
+  purge-full [<max_full_backups>] [--force]  
+             list outdated backup files (\$MAX_FULL_BACKUPS being the number of
+             full backups and associated incrementals to keep, counting in 
+             reverse chronological order)
+              [use --force to actually delete these files]
+  cleanup [--force]  
+             list broken backup chain files archives (e.g. after unfinished run)
+              [use --force to actually delete these files]
 
   changelog  print changelog / todo list
-  txt2man    feature for package admins, create a manpage based on the usage
-             output. download txt2man from http://mvertes.free.fr/, put it
-             in the path and run '$ME txt2man' to create a man page.
+  txt2man    feature for package maintainers - create a manpage based on the 
+             usage output. download txt2man from http://mvertes.free.fr/, put 
+             it in the PATH and run '$ME txt2man' to create a man page.
 
 OPTIONS:
   --force    passed to duplicity (see commands: purge, purge-full, cleanup)
@@ -1772,7 +1779,7 @@ case "$cmd" in
     else
       script=$POST
     fi
-    # script execution in a subshell, protect us from failures/overwrites
+    # script execution in a subshell, protect us from failures/var overwrites
     ( run_script "$script" )
     ;;
   bkp)
@@ -1800,11 +1807,17 @@ case "$cmd" in
     duplify cleanup -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
   purge)
-    duplify remove-older-than "${MAX_AGE:-1M}" \
+    MAX_AGE=${ftpl_pars[0]:-$MAX_AGE}
+    [ -z "$MAX_AGE" ] && error "  Missing parameter <max_age>. Can be set in profile or as command line parameter."
+    
+    duplify remove-older-than "${MAX_AGE}" \
           -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
   purge-full)
-    duplify remove-all-but-n-full "${MAX_FULL_BACKUPS:-1}" \
+    MAX_FULL_BACKUPS=${ftpl_pars[0]:-$MAX_FULL_BACKUPS}
+    [ -z "$MAX_FULL_BACKUPS" ] && error "  Missing parameter <max_full_backups>. Can be set in profile or as command line parameter."
+  
+    duplify remove-all-but-n-full "${MAX_FULL_BACKUPS}" \
           -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
   restore)
@@ -1819,7 +1832,7 @@ case "$cmd" in
   fetch)
     IN_PATH="${ftpl_pars[0]}"; OUT_PATH="${ftpl_pars[1]}"; 
     TIME="${ftpl_pars[2]:-now}";
-    ( [ -z "$IN_PATH" ] || [ -z "$OUT_PATH" ] ) && error "  Missing parameter src_path or target_path for fetch.
+    ( [ -z "$IN_PATH" ] || [ -z "$OUT_PATH" ] ) && error "  Missing parameter <src_path> or <target_path> for fetch.
   
   Hint: 
     Syntax is -> $ME <profile> fetch <src_path> <target_path> [<age>]"
