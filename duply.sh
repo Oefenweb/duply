@@ -38,6 +38,12 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  1.5.10 (26.03.2013)
+#  - minor indent and documentation fixes
+#  - bugfix: exclude filter failed on ubuntu, mawk w/o posix char class support
+#  - bugfix: fix url_decoding generally and for python3
+#  - bugfix 3609075: wrong script results in status line (thx David Epping)
+#
 #  1.5.9 (22.11.2012)
 #  - bugfix 3588926: filter --exclude* params for restore/fetch ate too much
 #  - restore/fetch now also ignores --include* or --exclude='foobar' 
@@ -300,7 +306,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.9"
+ME_VERSION="1.5.10"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -578,27 +584,31 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #   # for cloudfiles backend user id is CLOUDFILES_USERNAME, password is 
 #   # CLOUDFILES_APIKEY, you might need to set CLOUDFILES_AUTHURL manually
 #   cf+http://[user:password@]container_name
-#   file://[/absolute_]path
+#   file://[relative|/absolute]/local/path
 #   ftp[s]://user[:password]@other.host[:port]/some_dir
-#   gdocs://user[:password]@other.host/some_dir 
+#   hsi://user[:password]@other.host/some_dir
 #   hsi://user[:password]@other.host/some_dir
 #   imap[s]://user[:password]@host.com[/from_address_prefix]
-#   rsync://user[:password]@other.host[:port]::/module/some_dir
+#   rsync://user[:password]@host.com[:port]::[/]module/some_dir
 #   # rsync over ssh (only keyauth)
-#   rsync://user@other.host[:port]/relative_path
-#   rsync://user@other.host[:port]//absolute_path
+#   rsync://user@host.com[:port]/[relative|/absolute]_path
 #   # for the s3 user/password are AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
 #   s3://[user:password@]host/bucket_name[/prefix]
 #   s3+http://[user:password@]bucket_name[/prefix]
 #   # scp and sftp are aliases for the ssh backend
-#   ssh://user[:password]@other.host[:port]/some_dir
+#   ssh://user[:password]@other.host[:port]/[/]some_dir
 #   tahoe://alias/directory
+#   # for Ubuntu One set TARGET_PASS to oauth access token
+#   #   "consumer_key:consumer_secret:token:token_secret"
+#   # if non given credentials will be prompted for and one will be created
+#   u1://host_is_ignored/volume_path
+#   u1+http:///volume_path
 #   webdav[s]://user[:password]@other.host/some_dir
 # ATTENTION: characters other than A-Za-z0-9.-_.~ in user,password,path have 
 #            to be replaced by their url encoded pendants, see
 #            http://en.wikipedia.org/wiki/Url_encoding 
 #            if you define the credentials as TARGET_USER, TARGET_PASS below 
-#            duply will try to url_encode them for you if needed
+#            duply will try to url_encode them for you if need arises
 TARGET='${DEFAULT_TARGET}'
 # optionally the username/password can be defined as extra variables
 # setting them here _and_ in TARGET results in an error
@@ -832,17 +842,19 @@ function duplicity_version_lt {
 }
 
 function run_script { # run pre/post scripts
-  SCRIPT="$1"
+  local ERR=0
+  local SCRIPT="$1"
   if [ ! -z "$PREVIEW" ] ; then	
     echo $SCRIPT
   elif [ -r "$SCRIPT" ] ; then 
-  	echo -n "Running '$SCRIPT' "
-  	OUT=`. "$SCRIPT" 2>&1`; ERR=$?
-  	[ $ERR -eq "0" ] && echo "- OK" || echo "- FAILED (code $ERR)"
-  	echo -en ${OUT:+"Output: $OUT\n"} ;
+    echo -n "Running '$SCRIPT' "
+    OUT=`. "$SCRIPT" 2>&1`; ERR=$?
+    [ $ERR -eq "0" ] && echo "- OK" || echo "- FAILED (code $ERR)"
+    echo -en ${OUT:+"Output: $OUT\n"} ;
   else
     echo "Skipping n/a script '$SCRIPT'."
   fi
+  return $ERR
 }
 
 function run_cmd {
@@ -924,7 +936,7 @@ function duplicity_params_conf {
 	## in/exclude parameters are currently not supported on restores
 	if [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ]; then
 		# filter exclude params from fetch/restore
-		echo "$DUPL_PARAMS" | awk '{gsub(/--(ex|in)clude[a-z-]*(([[:space:]]+|=)[^-][[:graph:]]+)?/,"");print}'
+		echo "$DUPL_PARAMS" | awk '{gsub(/--(ex|in)clude[a-z-]*(([ \t]+|=)[^-][^ \t]+)?/,"");print}'
 		return
 	fi
 	
@@ -983,7 +995,7 @@ function date_fix {
 	# date busybox with -d epoch -D %s
 	date=$(date ${2:+-d $2 -D %s} ${1:++"$1"} 2> /dev/null) && \
 		echo $date && return
-	## some date commands do not support giving a time w/o setting it (irix,solaris,others?)
+	## some date commands do not support giving a time w/o setting it systemwide (irix,solaris,others?)
 	# python fallback
 	date=$(python -c "import time;print time.strftime('${1:-$DEFAULTFORMAT}',time.localtime(${2}))" 2> /dev/null) && \
 		echo $date && return
@@ -1031,7 +1043,11 @@ function var_isset {
 
 function url_encode {
   # utilize python, silently do nothing on error - because no python no duplicity
-  OUT=$(python -c "import urllib; print urllib.${2}quote('$1')" 2>/dev/null ); ERR=$?
+  OUT=$(python -c "
+try: import urllib.request as urllib
+except ImportError: import urllib
+print(urllib.${2}quote('$1'));
+" 2>/dev/null ); ERR=$?
   [ "$ERR" -eq 0 ] && echo $OUT || echo $1
 }
 
@@ -1451,7 +1467,9 @@ if ( ( ! var_isset 'TARGET_USER' && ! var_isset 'TARGET_URL_USER' ) && \
   # ok here some exceptions:
   #   protocols that do not need passwords
   #   s3[+http] only needs password for write operations
-  if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(file\|tahoe\|ssh\|scp\|sftp\)://$')" ]; then
+  #   u1[+http] can ask for creds and create an oauth token
+  echo "'$(tolower "${TARGET_URL_PROT}")'"
+  if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(file\|tahoe\|ssh\|scp\|sftp\|u1\(\+http\)\?\)://$')" ]; then
     : # all is well file/tahoe do not need passwords, ssh might use key auth
   elif [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^s3\(\+http\)\?://$')" ] && \
      [ -z "$(echo ${cmds} | grep -e '\(bkp\|incr\|full\|purge\|cleanup\)')" ]; then
@@ -1705,6 +1723,10 @@ gpg_export_if_needed "${GPG_KEYS_ENC[@]} $(gpg_signing && echo $GPG_KEY_SIGN)"
 
 # command execution #####################################################################
 
+# unquote url vars
+var_isset 'TARGET_URL_USER' && TARGET_URL_USER="$(url_decode "$TARGET_URL_USER")"
+var_isset 'TARGET_URL_PASS' && TARGET_URL_PASS="$(url_decode "$TARGET_URL_PASS")"
+
 # defined TARGET_USER&PASS vars replace their URL pendants 
 # (double defs already dealt with)
 var_isset 'TARGET_USER' && TARGET_URL_USER="$TARGET_USER"
@@ -1733,7 +1755,7 @@ case "$(tolower "${TARGET_URL_PROT%%:*}")" in
 			BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_AUTHURL=$(qw "${CLOUDFILES_AUTHURL}")"
 		fi
 		;;
-		'file'|'tahoe')
+	'file'|'tahoe')
 		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
 		;;
 	'rsync')
