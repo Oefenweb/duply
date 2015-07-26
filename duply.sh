@@ -34,15 +34,23 @@
 #
 #
 #  CHANGELOG:
-#  1.9.3dev ()
+#  1.10dev ()
 #  - featreq 36: busybox issues - fix awk, grep version detection,
 #    fix grep failure because --color=never switch is unsupported
 #    (thx Thomas Harning Jr. for reporting and helping to debug/fix it)
 #  - bugfix 81: --exclude-globbing-filelist is deprecated since 0.7.03
-#    (thx Joachim Wiedorn, also for maintaining the depian package)
+#    (thx Joachim Wiedorn, also for maintaining the debian package)
+#  - implemented base-/dirname as bash functions
+#  - featreq 31 " Support for duplicity Azure backend " - ignored a 
+#    contributed patch by Scott McKenzie and instead opted for removing almost
+#    all code that deals with special env vars required by backends.
+#    modifying and adding this results in too much overhead so i dropped this
+#    feature. the future alternative for users is to consult the duplicity 
+#    manpage and add the needed export definitions to the conf file.
+#    added a commented example to the template conf at the appropriate place.
 #
 #  1.9.2 (21.6.2015)
-#  - bugfix: export keys with gpg2.1 works now (thx Philip Jocks)
+#  - bugfix: exporting keys with gpg2.1 works now (thx Philip Jocks)
 #  - documented GPG_OPTS needed for gpg2.1 to conf template (thx Troy Engel)
 #  - bugfix 82: GREP_OPTIONS=--color=always disrupted time calculation
 #  - added GPG conf var (see conf template for details)
@@ -375,6 +383,28 @@
 #    1.0   - first release
 ###############################################################################
 
+# utility functions overriding binaries
+
+# wrap grep to override possible env set GREP_OPTIONS=--color=always
+function grep {
+  command env -u GREP_OPTIONS grep "$@"
+}
+
+# implement basename in plain bash
+function basename {
+  echo "${1##*/}"
+}
+
+# implement dirname in plain bash
+function dirname {
+  echo ${1%/*}
+}
+
+# a lookup function for executables working with names or file paths
+function lookup {
+  local bin="$1"
+  ( [ "${bin##*/}" == "$bin" ] && hash "$bin" 2>/dev/null ) || [ -x "$bin" ]
+}
 
 # important definitions #######################################################
 
@@ -394,6 +424,7 @@ DEFAULT_GPG_KEY='_KEY_ID_'
 DEFAULT_GPG_PW='_GPG_PASSWORD_'
 
 # function definitions ##########################
+
 function set_config { # sets global config vars
   local CONFHOME_COMPAT="$HOME/.ftplicity"
   local CONFHOME="$HOME/.duply"
@@ -727,6 +758,13 @@ TARGET='${DEFAULT_TARGET}'
 # setting them here _and_ in TARGET results in an error
 #TARGET_USER='${DEFAULT_TARGET_USER}'
 #TARGET_PASS='${DEFAULT_TARGET_PASS}'
+# alternatively you might export the auth env vars for your backend here
+# when in doubt consult (if existing) the NOTE section of your backend on
+#  http://duplicity.nongnu.org/duplicity.1.html for details
+# eg. for cloud files backend it might look like this (uncomment for use!)
+#export CLOUDFILES_USERNAME='someuser'
+#export CLOUDFILES_APIKEY='somekey'
+#export CLOUDFILES_AUTHURL ='someurl'
 
 # base directory to backup
 SOURCE='${DEFAULT_SOURCE}'
@@ -1019,17 +1057,6 @@ function run_cmd {
   # reset
   unset CMD_DISABLED CMD_MSG
   return $CMD_ERR
-}
-
-# wrap grep to override possible env set GREP_OPTIONS=--color=always
-function grep {
-  command env -u GREP_OPTIONS grep "$@"
-}
-
-# a lookup function for executables working with names or file paths
-function lookup {
-  local bin="$1"
-  ( [ "${bin##*/}" == "$bin" ] && hash "$bin" 2>/dev/null ) || [ -x "$bin" ]
 }
 
 function qw { quotewrap "$@"; }
@@ -2016,92 +2043,59 @@ var_isset 'TARGET_PASS' && TARGET_URL_PASS="$TARGET_PASS"
 
 # build target backend data depending on protocol
 case "$(tolower "${TARGET_URL_PROT%%:*}")" in
-  's3'|'s3+http')
-    BACKEND_PARAMS="AWS_ACCESS_KEY_ID='${TARGET_URL_USER}' AWS_SECRET_ACCESS_KEY='${TARGET_URL_PASS}'"
-    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-    ;;
-  'gs')
-    BACKEND_PARAMS="GS_ACCESS_KEY_ID='${TARGET_URL_USER}' GS_SECRET_ACCESS_KEY='${TARGET_URL_PASS}'"
-    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-    ;;
   'cf+http')
-    # respect potentially set cloudfile env vars
-    var_isset 'CLOUDFILES_USERNAME' && TARGET_URL_USER="$CLOUDFILES_USERNAME"
-    var_isset 'CLOUDFILES_APIKEY' && TARGET_URL_PASS="$CLOUDFILES_APIKEY"
-    # add them to duplicity params
-    var_isset 'TARGET_URL_USER' && \
-      BACKEND_PARAMS="CLOUDFILES_USERNAME=$(qw "${TARGET_URL_USER}")"
-    var_isset 'TARGET_URL_PASS' && \
-      BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_APIKEY=$(qw "${TARGET_URL_PASS}")"
-    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
     # info on missing AUTH_URL
     if ! var_isset 'CLOUDFILES_AUTHURL'; then
-      echo -e "INFO: No CLOUDFILES_AUTHURL defined (in conf).\n      Will use default from python-cloudfiles (probably rackspace)."
-    else
-      BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_AUTHURL=$(qw "${CLOUDFILES_AUTHURL}")"
+      inform "No CLOUDFILES_AUTHURL exported (in conf).
+Will use default which is probably rackspace."
     fi
     ;;
-   'file'|'tahoe'|'dpbx')
-     BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-     ;;
    'swift')
-     BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-     # respect possibly set swift env vars
-     var_isset 'SWIFT_USERNAME' && TARGET_URL_USER="$SWIFT_USERNAME"
-     var_isset 'SWIFT_PASSWORD' && TARGET_URL_PASS="$SWIFT_PASSWORD"
-     # add them to duplicity params like with cloudfile to make it look standardized
-     var_isset 'TARGET_URL_USER' && \
-       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_USERNAME=$(qw "${TARGET_URL_USER}")"
-     var_isset 'SWIFT_AUTHURL' && \
-       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_AUTHURL=$(qw "${SWIFT_AUTHURL}")"
-     ( var_isset 'TARGET_URL_USER' && ! var_isset 'SWIFT_AUTHURL' ) &&\
+    # info on possibly missing AUTH_URL
+       var_isset 'SWIFT_AUTHURL' &&\
        warning "\
-Swift will probably fail because the conf var SWIFT_AUTHURL was not defined!"
-     var_isset 'SWIFT_AUTHVERSION' && \
-       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_AUTHVERSION=$(qw "${SWIFT_AUTHVERSION}")"
-     var_isset 'TARGET_URL_PASS' && \
-       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-     ;;
+Swift will probably fail because the conf var SWIFT_AUTHURL was not exported!"
+    ;;
   'rsync')
     # everything in url (this backend does not support pass in env var)
     # this is obsolete from version 0.6.10 (buggy), hopefully fixed in 0.6.11
     # print warning older version is detected
-    var_isset 'TARGET_URL_USER' && BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")"
-    if duplicity_version_lt 610; then
+    duplicity_version_lt 610 &&
       warning "\
 Duplicity version '$DUPL_VERSION' does not support providing the password as 
 env var for rsync backend. For security reasons you should consider to 
 update to a version greater than '0.6.10' of duplicity."
-      var_isset 'TARGET_URL_PASS' && BACKEND_CREDS="${BACKEND_CREDS}:$(url_encode "${TARGET_URL_PASS}")"
-    else
-      var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-    fi
-    var_isset 'BACKEND_CREDS' && BACKEND_CREDS="${BACKEND_CREDS}@"
-    BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
     ;;
   *)
     # for all other protocols we put username in url and pass into env var 
     # for secúrity reasons, we url_encode username to protect special chars
-    var_isset 'TARGET_URL_USER' && 
-      BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")@"
+
     # sortout backends with special ways to handle password
     case "$(tolower "${TARGET_URL_PROT%%:*}")" in
       'imap'|'imaps')
         var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
       ;;
-      'ssh'|'sftp'|'scp')
-        # ssh backend wants to be told that theres a pass to use
-        var_isset 'TARGET_URL_PASS' && \
-          DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
-          BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-      ;;
       *)
+        # add needed param for ssh backend
+        case "$(tolower "${TARGET_URL_PROT%%:*}")" in
+          'ssh'|'sftp'|'scp')
+            # ssh backend wants to be told that there is a pass to use
+            var_isset 'TARGET_URL_PASS' && \
+              DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
+              BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+            ;;
+        esac
         # rest uses FTP_PASS var
         var_isset 'TARGET_URL_PASS' && \
           BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
       ;;
     esac
-    BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
+    # insert url encoded username into target url if needed
+    if var_isset 'TARGET_URL_USER'; then
+      BACKEND_URL="${TARGET_URL_PROT}$(url_encode "${TARGET_URL_USER}")@${TARGET_URL_HOSTPATH}"
+    else
+      BACKEND_URL="$TARGET"
+    fi
     ;;
 esac
 
