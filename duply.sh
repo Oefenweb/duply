@@ -34,6 +34,10 @@
 #
 #
 #  CHANGELOG:
+#  1.7.4 (24.6.2014)
+#  - remove ubuntu one support, service is discontinued
+#  - featreq 31: add authenticated swift (contributed by Justus Seifert)
+#
 #  1.7.3 (3.4.2014)
 #  - bugfix: test routines, gpg2 asked for passphrase although GPG_PW was set
 #
@@ -345,7 +349,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.7.3"
+ME_VERSION="1.7.4"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -667,13 +671,12 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #   s3+http://[user:password@]bucket_name[/prefix]
 #   # scp and sftp are aliases for the ssh backend
 #   ssh://user[:password]@other.host[:port]/[/]some_dir
+#   # for authenticated swift define TARGET_USER or SWIFT_USERNAME,
+#   # TARGET_PASS or SWIFT_PASSWORD, SWIFT_AUTHURL (mandatory, the path to 
+#   # your identity service, omitting leads to an error with swift),
+#   # optionally SWIFT_AUTHVERSION (which defaults to "1")
 #   swift://container_name
 #   tahoe://alias/directory
-#   # for Ubuntu One set TARGET_PASS to oauth access token
-#   #   "consumer_key:consumer_secret:token:token_secret"
-#   # if non given credentials will be prompted for and one will be created
-#   u1://host_is_ignored/volume_path
-#   u1+http:///volume_path
 #   webdav[s]://user[:password]@other.host/some_dir
 # ATTENTION: characters other than A-Za-z0-9.-_.~ in the URL have 
 #            to be replaced by their url encoded pendants, see
@@ -1612,8 +1615,7 @@ if ( ( ! var_isset 'TARGET_USER' && ! var_isset 'TARGET_URL_USER' ) && \
   # ok here some exceptions:
   #   protocols that do not need passwords
   #   s3[+http] only needs password for write operations
-  #   u1[+http] can ask for creds and create an oauth token
-  if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(dpbx\|file\|tahoe\|ssh\|scp\|sftp\|swift\|u1\(\+http\)\?\)://$')" ]; then
+  if [ -n "$( tolower "${TARGET_URL_PROT}" | grep -e '^\(dpbx\|file\|tahoe\|ssh\|scp\|sftp\|swift\)://$' )" ]; then
     : # all is well file/tahoe do not need passwords, ssh might use key auth
   elif [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^s3\(\+http\)\?://$')" ] && \
      [ -z "$(echo ${cmds} | grep -e '\(bkp\|incr\|full\|purge\|cleanup\)')" ]; then
@@ -1932,9 +1934,27 @@ case "$(tolower "${TARGET_URL_PROT%%:*}")" in
       BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_AUTHURL=$(qw "${CLOUDFILES_AUTHURL}")"
     fi
     ;;
-  'file'|'tahoe'|'dpbx'|'swift')
-    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-    ;;
+   'file'|'tahoe'|'dpbx')
+     BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+     ;;
+   'swift')
+     BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+     # respect possibly set swift env vars
+     var_isset 'SWIFT_USERNAME' && TARGET_URL_USER="$SWIFT_USERNAME"
+     var_isset 'SWIFT_PASSWORD' && TARGET_URL_PASS="$SWIFT_PASSWORD"
+     # add them to duplicity params like with cloudfile to make it look standardized
+     var_isset 'TARGET_URL_USER' && \
+       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_USERNAME=$(qw "${TARGET_URL_USER}")"
+     var_isset 'SWIFT_AUTHURL' && \
+       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_AUTHURL=$(qw "${SWIFT_AUTHURL}")"
+     ( var_isset 'TARGET_URL_USER' && ! var_isset 'SWIFT_AUTHURL' ) &&\
+       warning "\
+Swift will probably fail because the conf var SWIFT_AUTHURL was not defined!"
+     var_isset 'SWIFT_AUTHVERSION' && \
+       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_AUTHVERSION=$(qw "${SWIFT_AUTHVERSION}")"
+     var_isset 'TARGET_URL_PASS' && \
+       BACKEND_PARAMS="$BACKEND_PARAMS SWIFT_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+     ;;
   'rsync')
     # everything in url (this backend does not support pass in env var)
     # this is obsolete from version 0.6.10 (buggy), hopefully fixed in 0.6.11
