@@ -34,6 +34,13 @@
 #
 #
 #  CHANGELOG:
+#  1.9.3dev ()
+#  - featreq 36: busybox issues - fix awk, grep version detection,
+#    fix grep failure because --color=never switch is unsupported
+#    (thx Thomas Harning Jr. for reporting and helping to debug/fix it)
+#  - bugfix 81: --exclude-globbing-filelist is deprecated since 0.7.03
+#    (thx Joachim Wiedorn, also for maintaining the depian package)
+#
 #  1.9.2 (21.6.2015)
 #  - bugfix: export keys with gpg2.1 works now (thx Philip Jocks)
 #  - documented GPG_OPTS needed for gpg2.1 to conf template (thx Troy Engel)
@@ -374,7 +381,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.9.2"
+ME_VERSION="1.9.3dev"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -431,7 +438,7 @@ function set_config { # sets global config vars
 
 function version_info { # print version information
   cat <<END
-  $ME version $ME_VERSION
+  $ME_NAME version $ME_VERSION
   ($ME_WEBSITE)
 END
 }
@@ -446,15 +453,13 @@ END
 
 function using_info {
   lookup duplicity && duplicity_version_get
-  local NOTFOUND="[not found]"
+  local NOTFOUND="MISSING"
   # freebsd awk (--version only), debian mawk (-W version only), deliver '' so awk does not wait for input
-  local AWK_VERSION=$( lookup awk && (awk --version '' 2>/dev/null || awk -W version '' 2>/dev/null) |\
-                         awk '/.+/{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);print $0;exit}' \
-                       || echo "[MISSING]" )
+  local AWK_VERSION=$( lookup awk && (awk --version 2>/dev/null || awk -W version 2>&1) | awk 'NR<=2&&tolower($0)~/(busybox|awk)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
+  local GREP_VERSION=$( lookup grep && grep --version 2>&1 | awk 'NR<=2&&tolower($0)~/(busybox|grep.*[0-9]+\.[0-9]+)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
   local PYTHON_VERSION=$(lookup python && python -V 2>&1| awk '{print tolower($0);exit}' || echo "python $NOTFOUND" )
   local GPG_INFO=$(gpg_avail && gpg --version 2>&1| awk 'NR==1{v=$1" "$3};/^Home:/{print v" ("$0")"}' || echo "gpg $NOTFOUND")
   local BASH_VERSION=$(bash --version | awk 'NR==1{IGNORECASE=1;sub(/GNU bash, version[ ]+/,"",$0);print $0}')
-  local GREP_VERSION=$(lookup grep && grep --version | awk 'NR==1{IGNORECASE=1;sub(/grep[ ]+/,"",$0);print $0}' || echo "$NOTFOUND")
   echo -e "Using installed duplicity version ${DUPL_VERSION:-$NOTFOUND}\
 ${PYTHON_VERSION+, $PYTHON_VERSION${PYTHONPATH:+ 'PYTHONPATH=$PYTHONPATH'}}\
 ${GPG_INFO:+, $GPG_INFO}${AWK_VERSION:+, awk '${AWK_VERSION}'}${GREP_VERSION:+, grep '${GREP_VERSION}'}\
@@ -501,7 +506,7 @@ PROFILE:
   to '~/.${ME_NAME}/<profile>' (~ expands to environment variable \$HOME).
 
   Superuser root can place profiles under '/etc/${ME_NAME}'. Simply create
-  the folder manually before running $ME as superuser.
+  the folder manually before running $ME_NAME as superuser.
   Note:  
     Already existing profiles in root's home folder will cease to work
     unless they are moved to the new location manually.
@@ -574,7 +579,7 @@ COMMANDS:
   txt2man    feature for package maintainers - create a manpage based on the 
              usage output. download txt2man from http://mvertes.free.fr/, put 
              it in the PATH and run '$ME txt2man' to create a man page.
-  version    show version information of $ME and needed programs
+  version    show version information of $ME_NAME and needed programs
 
 OPTIONS:
   --force    passed to duplicity (see commands: purge, purge-full, cleanup)
@@ -905,8 +910,8 @@ function error_gpg_key {
   error_gpg "${KIND} gpg key '${KEY_ID}' cannot be found." \
 "Doublecheck if the above key is listed by 'gpg --list-keys' or available 
   as gpg key file '$(basename "$(gpg_keyfile "${KEY_ID}")")' in the profile folder.
-  If not you can put it there and $ME will autoimport it on the next run.
-  Alternatively import it manually as the user you plan to run $ME with."
+  If not you can put it there and $ME_NAME will autoimport it on the next run.
+  Alternatively import it manually as the user you plan to run $ME_NAME with."
 }
 
 function error_gpg_test {
@@ -917,10 +922,10 @@ function error_gpg_test {
 Hint${hint:+s}:
   ${hint}This error means that gpg is probably misconfigured or not working 
   correctly. The error message above should help to solve the problem.
-  However, if for some reason $ME should misinterpret the situation you 
+  However, if for some reason $ME_NAME should misinterpret the situation you 
   can define GPG_TEST='disabled' in the conf file to bypass the test.
   Please do not forget to report the bug in order to resolve the problem
-  in future versions of $ME.
+  in future versions of $ME_NAME.
 "
 }
 
@@ -937,7 +942,7 @@ function error_to_string {
 function duplicity_version_get {
 	var_isset DUPL_VERSION && return
 	DUPL_VERSION=`duplicity --version 2>&1 | awk '/^duplicity /{print $2; exit;}'`
-	#DUPL_VERSION='0.6.08b' #,0.4.4.RC4,0.6.08b
+	#DUPL_VERSION='0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
 	DUPL_VERSION_VALUE=0
 	DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
 	if (match(v,/[^\.0-9]+[0-9]*$/)){
@@ -957,7 +962,7 @@ function duplicity_version_check {
 	if [ $DUPL_VERSION_VALUE -eq 0 ]; then
 		inform "duplicity version check failed (please report, this is a bug)" 
 	elif [ $DUPL_VERSION_VALUE -le 404 ] && [ ${DUPL_VERSION_RC:-4} -lt 4 ]; then
-		error "The installed version $DUPL_VERSION is incompatible with $ME v$ME_VERSION.
+		error "The installed version $DUPL_VERSION is incompatible with $ME_NAME v$ME_VERSION.
 You should upgrade your version of duplicity to at least v0.4.4RC4 or
 use the older ftplicity version 1.1.1 from $ME_WEBSITE."
 	fi
@@ -1018,7 +1023,7 @@ function run_cmd {
 
 # wrap grep to override possible env set GREP_OPTIONS=--color=always
 function grep {
-  command grep --color=never "$@"
+  command env -u GREP_OPTIONS grep "$@"
 }
 
 # a lookup function for executables working with names or file paths
@@ -1077,17 +1082,18 @@ DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR' \
  ${DUPL_ARG_ENC}"
 }
 
-# filter the DUPL_PARAMS var from conf
+
+# function to filter the DUPL_PARAMS var from user conf
 function duplicity_params_conf {
-	# reuse cmd var from main loop
-	## in/exclude parameters are currently not supported on restores
-	if [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ]; then
-		# filter exclude params from fetch/restore
-		echo "$DUPL_PARAMS" | awk '{gsub(/--(ex|in)clude[a-z-]*(([ \t]+|=)[^-][^ \t]+)?/,"");print}'
-		return
-	fi
-	
-	echo "$DUPL_PARAMS"
+  # reuse cmd var from main loop
+  ## in/exclude parameters are currently not supported on restores
+  if [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ] || [ "$cmd" = "status" ]; then
+    # filter exclude params from fetch/restore
+    echo "$DUPL_PARAMS" | awk '{gsub(/--(ex|in)clude[a-z-]*(([ \t]+|=)[^-][^ \t]+)?/,"");print}'
+    return
+  fi
+  
+  echo "$DUPL_PARAMS"
 }
 
 function duplify { # the actual wrapper function
@@ -1302,7 +1308,7 @@ function gpg_import {
   fi
 
   # failover: user has to set trust manually
-  echo -e "For $ME to work you have to set the trust level 
+  echo -e "For $ME_NAME to work you have to set the trust level 
 with the command \"trust\" to \"ultimate\" (5) now.
 Exit the edit mode of gpg with \"quit\"."
   CMD_MSG="Running gpg to manually edit key '$KEY_ID'"
@@ -1350,7 +1356,7 @@ function gpg_export_if_needed {
     done
   done
   
-  [ -n "$SUCCESS" ] && inform "$ME exported new keys to your profile.
+  [ -n "$SUCCESS" ] && inform "$ME_NAME exported new keys to your profile.
 You should backup your changed profile folder now and store it in a safe place."
 }
 
@@ -2104,6 +2110,8 @@ esac
 SOURCE="$SOURCE"
 BACKEND_URL="$BACKEND_URL"
 EXCLUDE="$EXCLUDE"
+# since 0.7.03 --exclude-globbing-filelist is deprecated
+EXCLUDE_PARAM="--exclude$(duplicity_version_lt 703 && echo -globbing)-filelist" 
 
 # replace magic separators to condition command equivalents (+=and,-=or)
 cmds=$(awk -v cmds="$cmds" "BEGIN{ gsub(/\+/,\"_and_\",cmds); gsub(/\-/,\"_or_\",cmds); print cmds}")
@@ -2170,20 +2178,20 @@ case "$(tolower $cmd)" in
     ( run_script "$script" )
     ;;
   'bkp')
-    duplify -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+    duplify -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
   'incr')
-    duplify incr -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+    duplify incr -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
   'full')
-    duplify full -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+    duplify full -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
   'verify')
     TIME="${ftpl_pars[0]:+"-t ${ftpl_pars[0]}"}"
-    duplify verify -- $TIME "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+    duplify verify -- $TIME "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           "$BACKEND_URL" "$SOURCE"
     ;;
   'verifypath')
@@ -2194,7 +2202,7 @@ case "$(tolower $cmd)" in
   Hint: 
     Syntax is -> $ME <profile> verifyPath <rel_bkp_path> <local_path> [<age>]"
 
-    duplify verify -- $TIME "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+    duplify verify -- $TIME "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           --file-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
     ;;
   'list')
