@@ -602,12 +602,10 @@ SOURCE='${DEFAULT_SOURCE}'
 
 # Time frame for old backups to keep, Used for the "purge" command.  
 # see duplicity man page, chapter TIME_FORMATS)
-# defaults to 1M, if not set
 #MAX_AGE=1M
 
 # Number of full backups to keep. Used for the "purge-full" command. 
 # See duplicity man page, action "remove-all-but-n-full".
-# defaults to 1, if not set 
 #MAX_FULL_BACKUPS=1
 
 # activates duplicity --full-if-older-than option (since duplicity v0.4.4.RC3) 
