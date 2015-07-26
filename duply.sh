@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                           #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.   #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany           #
-#  (c) 2008-2010 Edgar Soldin (changes since version 1.3)                     #
+#  (c) 2008-2011 Edgar Soldin (changes since version 1.3)                     #
 ###############################################################################
 #  LICENSE:                                                                   #
 #  This program is licensed under GPLv2.                                      #
@@ -29,18 +29,29 @@
 #                                            --short-filenames
 #                                            --old-filenames
 #          - add 'exclude_<command>' list usage eg. exclude_verify
-#          - bugfix 3042778: check success of commands and react in batches e.g. 
-#            backup_AND_verify_AND_purge, pre_and_bkp_and_post
 #          - a download/install duplicity option
 #          - bug: on key import it tries to import again and fails because 
-#            of already existing key, probably because of old gpgkey in profile
+#            of already existing key, probably caused by legacy gpgkey 
 #          - hint on install software if a piece is missing
-#          - ftplicity-Feature Requests-2995409: Prevent concurrent runs for the same profile
+#          - featreq 2995409: Prevent concurrent runs for same profile
+#          - featreq 3042778: check success of commands and react in batches 
+#            e.g. backup_AND_verify_AND_purge, pre_and_bkp_and_post
 #
 #  CHANGELOG:
-#  1.5.4.1
+#  1.5.4.2 (6.1.2011)
+#  - new command changelog
+#  - bugfix 3109884: freebsd awk segfaulted on printf '%*', use print again
+#  - bugfix: freebsd awk hangs on 'awk -W version' 
+#  - bugfix 3150244: mawk does not know '--version'
+#  - minor help text improvements
+#  - new env vars CMD_PREV,CMD_NEXT replacing CMD env var for scripts
+#
+#  1.5.4.1 (4.12.2010)
 #  - output awk, python, bash version now in prolog
 #  - shebang uses /usr/bin/env now for freebsd compatibility, bash not in /bin/bash 
+#  - new --disable-encryption parameter, to override profile encr settings for one run
+#  - added exclude-if-present setting to conf template
+#  - bug 3126972: GPG_PW only needed for signing/symmetric encryption (even though duplicity still needs it)
 #
 #  1.5.4 (15.11.2010)
 #  - as of 1.5.3 already, new ARCH_DIR config option
@@ -228,7 +239,7 @@
 #    1.1.1 - bugfix: encryption reactivated
 #    1.1   - introduced config directory
 #    1.0   - first release
-#
+###############################################################################
 
 
 # important definitions #######################################################
@@ -236,7 +247,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.4.1"
+ME_VERSION="1.5.4.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -307,31 +318,32 @@ DESCRIPTION:
   Duply deals as a wrapper for the mighty duplicity magic.
   It simplifies running duplicity with cron or on command line by:
 
-   - keeping settings in profiles per backup job 
-   - enabling batch actions eg. backup_verify_purge
-   - executing pre/post scripts
+   - keeping recurring settings in profiles per backup job 
+   - enabling batch operations eg. backup_verify_purge
+   - executing pre/post scripts for every command
    - precondition checking for flawless duplicity operation 
 
   For each backup job one configuration profile must be created.
   The profile folder will be stored under '~/.${ME_NAME}/<profile>'
   (where ~ is the current users home directory).
   Hint:
-  If the folder '/etc/${ME_NAME} exists the profiles for the super 
-  user root will be searched & created there.
-      
+   If the folder '/etc/${ME_NAME}' exists, the profiles for the super 
+   user root will be searched & created there.
+
 USAGE:
   first time usage (profile creation)
     $ME <profile> create
-  
+
   general usage in single or batch mode (see EXAMPLES)
     $ME <profile> <command>[_<command>_...] [<options> ...]
     
   Non $ME options are passed on to duplicity (see OPTIONS).
-             
-PROFILE:    
+  All conf parameters can also be defined in the environment instead.
+
+PROFILE:
   Indicated by a profile _name_ (<profile>), which is resolved to 
   '~/.${ME_NAME}/<profile>' (~ expands to environment variable \$HOME).
-  
+
   Superuser root can place profiles under '/etc/${ME_NAME}' if the
   folder is manually created before running $ME.
   ATTENTION: 
@@ -349,49 +361,50 @@ PROFILE:
   example 2:   $ME ~/.${ME_NAME}/humbug backup
              
 COMMANDS:
-  usage:     get usage help text
-  create:    creates a configuration profile
-  backup:    backup with pre/post script execution (batch: pre_bkp_post),
-              full - if parameter full_if_older matches 
-                     or no earlier backup is found
-              incremental - in all other cases
-  pre/post:  execute <profile>/$(basename "$PRE"), <profile>/$(basename "$POST") scripts
-  bkp:       as above but without executing pre/post scripts
-  full:      force full backup
-  incr:      force incremental backup
-  list [<age>]:      
+  usage      get usage help text
+  changelog  print changelog / todo list
+  create     creates a configuration profile
+  backup     backup with pre/post script execution (batch: pre_bkp_post),
+              full (if full_if_older matches or no earlier backup is found)
+              incremental (in all other cases)
+  pre/post   execute <profile>/$(basename "$PRE"), <profile>/$(basename "$POST") scripts
+  bkp        as above but without executing pre/post scripts
+  full       force full backup
+  incr       force incremental backup
+  list [<age>]       
              list all files in backup (as it was at <age>, default: now)
-  status:    prints backup sets and chains currently in repository
-  verify:    list files changed since latest backup
-  purge [--force]:
+  status     prints backup sets and chains currently in repository
+  verify     list files changed since latest backup
+  purge [--force] 
              shows outdated backup archives (older than \$MAX_AGE)
-             [--force, delete these files]
-  purge-full [--force]:
+              [actually delete these files]
+  purge-full [--force] 
              shows outdated backups (more than \$MAX_FULL_BACKUPS, 
              the number of 'recent' full backups and associated 
-             incrementals to keep)
-             [--force, delete these files]             
-  cleanup [--force]:
+             incrementals to keep) [actually delete these files]             
+  cleanup [--force] 
              shows broken backup archives (e.g. after unfinished run)
-             [--force, delete these files]
-  restore <target_path> [<age>]:
-             restore the backup to <target_path> 
-             [as it was at <age>]             
-  fetch <src_path> <target_path> [<age>]:
-             restore single file/folder from backup 
-             [as it was at <age>]
+              [actually delete these files]
+  restore <target_path> [<age>] 
+             restore the backup to <target_path> [as it was at <age>]             
+  fetch <src_path> <target_path> [<age>] 
+             restore single file/folder from backup [as it was at <age>]
 
 OPTIONS:
-  --force:   passed to duplicity (see commands: purge, purge-full, cleanup)
-  --preview: do nothing but print out generated duplicity command lines
-  --disable-encryption: disable encryption, overrides profile settings
+  --force    passed to duplicity (see commands: purge, purge-full, cleanup)
+  --preview  do nothing but print out generated duplicity command lines
+  --disable-encryption 
+             disable encryption, overrides profile settings
 
 PRE/POST SCRIPTS:
-  All internal duply variables will be readable in the script e.g. BACKEND_URL.
-  As a special variable CMD will hold the duply command the pre/post script 
-  was attached to e.g. 'pre_bkp_post_pre_verify_post' will call the pre script 
-  two times, but with CMD variable set to 'bkp' on the first and to 'verify' on 
-  the second run.
+  All internal duply variables will be readable in the scripts.
+  Some of interest might be 
+   CONFDIR, SOURCE, TARGET_URL_<PROT|HOSTPATH|USER|PASS>, 
+   GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_<PREV|NEXT>
+  The CMD_* variables were introduced to allow different actions according to 
+  the command the scripts were attached to e.g. 'pre_bkp_post_pre_verify_post' 
+  will call the pre script two times, but with CMD_NEXT variable set 
+  to 'bkp' on the first and to 'verify' on the second run.
 
 EXAMPLES:
   create profile 'humbug':
@@ -406,21 +419,24 @@ EXAMPLES:
     $ME humbug restore /mnt/restore
   restore /etc/passwd of 'humbug' from 4 days ago to /root/pw:
     $ME humbug fetch etc/passwd /root/pw 4D
-    (see "man duplicity", section TIME FORMATS)
+    (see "duplicity manpage", section TIME FORMATS)
   a one line batch job on 'humbug' for cron execution
     $ME humbug backup_verify_purge --force
 
 FILES in the profile folder(~/.${ME_NAME}/<profile>):
-  conf             main configuration file
-  pre              executed _before_ a backup
-  post             executed _after_ a backup
+  conf             profile configuration file
+  pre,post         pre/post scripts (see above for details)
   gpgkey.*.asc     exported GPG key file(s)
   exclude          a globbing list of included or excluded files/folders
-                   (see "man duplicity", section FILE SELECTION)
+                   (see "duplicity manpage", section FILE SELECTION)
 
 $(hint_profile)
 
 USAGE
+}
+
+function changelog {
+  cat $ME_LONG | awk '/^#####/{on=on+1}(on==3){sub(/^#(  )?/,"",$0);print}'
 }
 
 function create_config {
@@ -522,21 +538,6 @@ SOURCE='${DEFAULT_SOURCE}'
 # if set  '\${ARCH_DIR}/<profile>'
 #ARCH_DIR=/some/space/safe/.duply-cache
 
-# sets duplicity --time-separator option (since v0.4.4.RC2) to allow users 
-# to change the time separator from ':' to another character that will work 
-# on their system.  HINT: For Windows SMB shares, use --time-separator='_'.
-# NOTE: '-' is not valid as it conflicts with date separator.
-# ATTENTION: only use this with duplicity < 0.5.10, since then default file 
-#            naming is compatible and this option is pending depreciation 
-#DUPL_PARAMS="\$DUPL_PARAMS --time-separator _ "
-
-# activates duplicity --short-filenames option, when uploading to a file
-# system that can't have filenames longer than 30 characters (e.g. Mac OS 8)
-# or have problems with ':' as part of the filename (e.g. Microsoft Windows)
-# ATTENTION: only use this with duplicity < 0.5.10, later versions default file 
-#            naming is compatible and this option is pending depreciation
-#DUPL_PARAMS="\$DUPL_PARAMS --short-filenames "
- 
 # activates duplicity --full-if-older-than option (since duplicity v0.4.4.RC3) 
 # forces a full backup if last full backup reaches a specified age, for the 
 # format of MAX_FULLBKP_AGE see duplicity man page, chapter TIME_FORMATS
@@ -550,6 +551,28 @@ SOURCE='${DEFAULT_SOURCE}'
 # Uncomment the following two lines to enable this setting. 
 #VOLSIZE=50
 #DUPL_PARAMS="\$DUPL_PARAMS --volsize \$VOLSIZE "
+
+# exclude folders containing exclusion file (since duplicity 0.5.14)
+# Uncomment the following two lines to enable this setting.
+#FILENAME='.duplicity-ignore'
+#DUPL_PARAMS="\$DUPL_PARAMS --exclude-if-present '\$FILENAME'"
+
+# DEPRECATED setting
+# sets duplicity --time-separator option (since v0.4.4.RC2) to allow users 
+# to change the time separator from ':' to another character that will work 
+# on their system.  HINT: For Windows SMB shares, use --time-separator='_'.
+# NOTE: '-' is not valid as it conflicts with date separator.
+# ATTENTION: only use this with duplicity < 0.5.10, since then default file 
+#            naming is compatible and this option is pending depreciation 
+#DUPL_PARAMS="\$DUPL_PARAMS --time-separator _ "
+
+# DEPRECATED setting
+# activates duplicity --short-filenames option, when uploading to a file
+# system that can't have filenames longer than 30 characters (e.g. Mac OS 8)
+# or have problems with ':' as part of the filename (e.g. Microsoft Windows)
+# ATTENTION: only use this with duplicity < 0.5.10, later versions default file 
+#            naming is compatible and this option is pending depreciation
+#DUPL_PARAMS="\$DUPL_PARAMS --short-filenames "
 
 # more duplicity command line options can be added in the following way
 # don't forget to leave a separating space char at the end
@@ -676,7 +699,7 @@ function error_to_string {
 }
 
 function duplicity_version_get {
-	DUPL_VERSION=`$DUPLICITY --version 2>&1 | awk '/^duplicity /{printf $2; exit;}'`
+	DUPL_VERSION=`$DUPLICITY --version 2>&1 | awk '/^duplicity /{print $2; exit;}'`
 	#DUPL_VERSION='0.6.08b' #,0.4.4.RC4,0.6.08b
 	DUPL_VERSION_VALUE=0
 	DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
@@ -757,7 +780,7 @@ function duplicity_params_global {
     local DUPL_PARAM_ENC='--no-encryption'
   else
     local DUPL_PARAM_ENC=$(gpg_prefix_keyset ' --encrypt-key ' 'GPG_KEYS_ENC')
-    gpg_signing_disabled || local DUPL_PARAM_SIGN=$(gpg_prefix_keyset ' --sign-key ' 'GPG_KEY_SIGN')
+    gpg_signing && local DUPL_PARAM_SIGN=$(gpg_prefix_keyset ' --sign-key ' 'GPG_KEY_SIGN')
     local DUPL_ARG_ENC=$(var_isset 'GPG_PW' && echo "PASSPHRASE='$GPG_PW'")
   fi
 
@@ -891,12 +914,11 @@ function tolower {
 }
 
 function gpg_disabled {
-  [ "$(tolower ${GPG_KEY})" == "disabled" ] || \
-    echo ${GPG_KEYS_ENC} | grep -iq 'disabled'
+  echo "${GPG_KEY}${GPG_KEYS_ENC}" | grep -iq 'disabled'
 }
 
-function gpg_signing_disabled {
-  [ "$(tolower ${GPG_KEY_SIGN})" == "disabled" ]
+function gpg_signing {
+  return $(echo ${GPG_KEY_SIGN} | grep -ic 'disabled')
 }
 
 # parameter key id, key_type
@@ -1023,15 +1045,21 @@ function gpg_passwd {
   awk '/^[ \t]*GPG_PW[ \t=]/{\
         sub(/^[ \t]*GPG_PW[ \t]*=*/,"",$0);\
         gsub(/^[ \t]*[\047"]|[\047"][ \t]*$/,"",$0);\
-        printf $0; exit}' "$CONF"
+        print $0; exit}' "$CONF"
 }
 
-function gpg_decryptable {
+function gpg_key_decryptable {
+  # decryption needs pass, might be empty, but must be set
+  var_isset 'GPG_PW' || return 1
   local KEY_ID
   for KEY_ID in ${GPG_KEYS_ENC[@]}; do
     gpg_sec_avail $KEY_ID && return 0
   done
   return 1
+}
+
+function gpg_symmetric {
+  [ -n "$GPG_PW" ] && [ -z "${GPG_KEY}${GPG_KEYS_ENC}" ]
 }
 
 # start of script #######################################################################
@@ -1062,7 +1090,11 @@ case "$cmd" in
   usage|--help|-h|-H)
     usage_info
     exit 0
-    ;;	
+    ;;
+  changelog)
+    changelog
+    exit 0
+    ;;
   create)
     set_config
     if [ -d "$CONFDIR" ]; then
@@ -1255,7 +1287,7 @@ fi
 if gpg_disabled; then
 	: # encryption disabled, all is well
 
-elif [ -z "${GPG_KEY}" ] && ! var_isset 'GPG_PW'; then
+elif [ -z "${GPG_KEY}${GPG_KEYS_ENC}${GPG_KEY_SIGN}" ] && ! var_isset 'GPG_PW'; then
 	warning "GPG_KEY and GPG_PW are empty or not set in conf file 
 '$CONF'.
 Will disable encryption for duplicity now.
@@ -1275,13 +1307,14 @@ fi
 
 
 # Output versions info ########################################################
-AWK_VERSION=$(awk --version | awk '{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);printf $0;exit}')
-PYTHON_VERSION=$(python -V 2>&1| awk '{printf tolower($0);exit}')
-BASH_VERSION=$(bash --version | awk '/^GNU bash, version/{sub(/GNU bash, version[ ]+/,"",$0);printf $0}')
+# freebsd awk (--version only), debian mawk (-W version only), deliver '' so awk does not wait for input
+AWK_VERSION=$((awk --version '' 2>/dev/null || awk -W version '' 2>/dev/null) | awk '/.+/{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);print $0;exit}')
+PYTHON_VERSION=$(python -V 2>&1| awk '{print tolower($0);exit}')
+BASH_VERSION=$(bash --version | awk '/^GNU bash, version/{sub(/GNU bash, version[ ]+/,"",$0);print $0}')
 echo -e "Using installed duplicity version ${DUPL_VERSION}${PYTHON_VERSION+, $PYTHON_VERSION}\
 ${GPG_INFO:+, $GPG_INFO}${AWK_VERSION:+, awk '${AWK_VERSION}'}${BASH_VERSION:+, bash '${BASH_VERSION}'}."
 
-# GPG config check2 (needs gpg) ###############################################
+# GPG create key settings, config check2 (needs gpg) ##########################
 if gpg_disabled; then
 	: # the following tests are not necessary
 else
@@ -1292,14 +1325,8 @@ if [ "$GPG_KEY" == "${DEFAULT_GPG_KEY}" ]; then
 '$CONF'."
 fi
 
-# pw set?
-if ! var_isset 'GPG_PW' || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ]; then
-  error_gpg "Encryption Password GPG_PW not set or still default value in conf file 
-'$CONF'." "For empty password set GPG_PW='' in conf file."
-fi
-
 # check gpg keys format
-for KEY_SET_NAME in GPG_KEY GPG_KEYS_ENC GPG_KEY_SIGN; do
+for KEY_SET_NAME in GPG_KEY GPG_KEYS_ENC $(gpg_signing && echo -n GPG_KEY_SIGN); do
   eval KEY_SET="\${${KEY_SET_NAME}}"
   for KEY_ID in $(gpg_split_keyset "$KEY_SET"); do
     # test format [ ! $(echo $GPG_KEY | grep '^[0-9a-fA-F]\{8\}$') ] not set correct (8 digit ID) or
@@ -1325,7 +1352,7 @@ done
 
 # gpg secret sign key availability
 # if none set, autoset first encryption key as sign key
-if gpg_signing_disabled; then
+if ! gpg_signing; then
   echo "Signing disabled per configuration."
 elif ! var_isset 'GPG_KEY_SIGN'; then
   KEY_ID=${GPG_KEYS_ENC[0]}
@@ -1346,6 +1373,14 @@ else
   else
     echo "Using configured key '${KEY_ID}' as signing key."
   fi
+fi
+
+# pw set? only if symmetric or signing on
+if ( gpg_symmetric || gpg_signing ) \
+   && ( ! var_isset 'GPG_PW' || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ] ); then
+  error_gpg "Encryption Password GPG_PW (needed for signing or symmetric encryption) 
+is not set or still default value in conf file 
+'$CONF'." "For empty password set GPG_PW='' in conf file."
 fi
 
 # end GPG config plausibility check2 
@@ -1396,13 +1431,13 @@ function cleanup_gpgtest {
 }
 
 # signing enabled?
-if ! gpg_signing_disabled; then
+if gpg_signing; then
   CMD_PARAM_SIGN="--sign --default-key ${GPG_KEY_SIGN} --passphrase-fd 0"
   CMD_MSG_SIGN="Sign with ${GPG_KEY_SIGN}"
 fi
 
 # using keys
-if [ -n "$GPG_KEY" ]; then
+if [ ${#GPG_KEYS_ENC[@]} -gt 0 ]; then
 
   for KEY_ID in ${GPG_KEYS_ENC[@]}; do
     CMD_PARAMS="$CMD_PARAMS -r ${KEY_ID}"
@@ -1412,7 +1447,7 @@ if [ -n "$GPG_KEY" ]; then
   run_cmd gpg_passwd \| $GPG $CMD_PARAM_SIGN $CMD_PARAMS --batch --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
 
   if [ "$CMD_ERR" != "0" ]; then 
-    KEY_NOTRUST=$(echo "$CMD_OUT"|awk '/^\[GNUPG:\] INV_RECP 10/ { printf $4 }')
+    KEY_NOTRUST=$(echo "$CMD_OUT"|awk '/^\[GNUPG:\] INV_RECP 10/ { print $4 }')
     [ -n "$KEY_NOTRUST" ] && HINT="Key '${KEY_NOTRUST}' seems to be untrusted. If you really trust this key try to
   'gpg --edit-key $KEY_NOTRUST' and raise the trust level to ultimate. If you
   can trust all of your keys set GPG_OPTS='--trust-model always' in conf file."
@@ -1421,7 +1456,7 @@ if [ -n "$GPG_KEY" ]; then
 
   # check decrypting
   CMD_MSG="Test - Decrypt"
-  gpg_decryptable || CMD_DISABLED="No matching secret key available."
+  gpg_key_decryptable || CMD_DISABLED="No matching secret key or GPG_PW not set."
   run_cmd gpg_passwd \| $GPG --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch $GPG_OPTS -d "${GPG_TEST}_ENC"
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -1465,20 +1500,8 @@ fi # end disabled
 # Exclude file is needed, create it if necessary
 [ -f "$EXCLUDE" ] || touch "$EXCLUDE"
 
-# export key if not already #############################################################
-# TODO: export again if key changed, how to detect?
-#if [ "$GPG_KEY" != 'disabled' ] && [ ! -z "$GPG_KEY" ] && [ ! -f "$KEYFILE" ] ; then
-#     touch "$KEYFILE" && chmod 0600 "$KEYFILE"
-#     $GPG --armor --export $GPG_KEY >>"$KEYFILE"
-##     $GPG --armor --export-secret-keys $GPG_KEY >>"$KEYFILE"
-#     inform "Backup of used key ($GPG_KEY) did not exist as file
-#'$KEYFILE' .
-#Created it now.
-
-#Hint: You should backup your changed profile folder now."    
-#fi
-
-gpg_export_if_needed "${GPG_KEYS_ENC[@]} $(gpg_signing_disabled || echo $GPG_KEY_SIGN)"
+# export only used keys, if bkp not already exists ######################################
+gpg_export_if_needed "${GPG_KEYS_ENC[@]} $(gpg_signing && echo $GPG_KEY_SIGN)"
 
 
 # command execution #####################################################################
@@ -1518,8 +1541,7 @@ update to a version greater than '0.6.10' of duplicity."
 		# all protocols with username in url, only username is in url, 
 		# pass is env var for secúrity, url_encode username to protect special chars
 		var_isset 'TARGET_URL_USER' && 
-			BACKEND_CREDS="$(url_encode ${TARGET_URL_USER})\
-$( var_isset 'RSYNC_WRKRND' && var_isset 'TARGET_URL_PASS' && echo $(url_encode ${TARGET_URL_PASS}) )@"
+			BACKEND_CREDS="$(url_encode ${TARGET_URL_USER})@"
 		# sortout backends way to handle password
 		case "${TARGET_URL_PROT%%:*}" in
 			'imap'|'imaps')
@@ -1540,8 +1562,9 @@ SOURCE="'$SOURCE'"
 BACKEND_URL="'$BACKEND_URL'"
 EXCLUDE="'$EXCLUDE'"
 
-# converted cmds to array, lowercase for safety
+# convert cmds to array, lowercase for safety
 CMDS=( $(awk "BEGIN{ cmds=tolower(\"$cmds\"); gsub(/_/,\" \",cmds); print cmds }") )
+
 # run cmds
 for cmd in ${CMDS[*]};
 do
@@ -1554,17 +1577,21 @@ RUN_START=$(date_fix %s)$(nsecs)
 # user info
 echo; separator "Start running command $(echo $cmd|awk '$0=toupper($0)') at $(date_from_nsecs $RUN_START)"
 
+# get prev/nextcmd vars
+nextno=$(($CMD_NO+1))
+[ "$nextno" -lt "${#CMDS[@]}" ] && CMD_NEXT=${CMDS[$nextno]} || CMD_NEXT='END'
+prevno=$(($CMD_NO-1))
+[ "$prevno" -ge 0 ] && CMD_PREV=${CMDS[$prevno]} || CMD_PREV='START'
+
 case "$cmd" in
   pre|post)
     if [ "$cmd" == 'pre' ]; then
-    	script=$PRE
-    	dupl_cmd=${CMDS[$(($CMD_NO+1))]}
+      script=$PRE
     else
-		script=$POST
-		dupl_cmd=${CMDS[$(($CMD_NO-1))]}
+      script=$POST
     fi
     # script execution in a subshell, protect us from failures/overwrites
-    ( CMD="$dupl_cmd"; run_script "$script" )
+    ( run_script "$script" )
     ;;
   bkp)
     duplify -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
