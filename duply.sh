@@ -34,6 +34,13 @@
 #
 #
 #  CHANGELOG:
+#  1.9.2 (21.6.2015)
+#  - bugfix: export keys with gpg2.1 works now (thx Philip Jocks)
+#  - documented GPG_OPTS needed for gpg2.1 to conf template (thx Troy Engel)
+#  - bugfix 82: GREP_OPTIONS=--color=always disrupted time calculation
+#  - added GPG conf var (see conf template for details)
+#  - added grep version output as it is an integral needed binary
+#
 #  1.9.1 (13.10.2014)
 #  - export CMD_ERR now for scripts to detect if CMD_PREV failed/succeeded
 #  - bugfix: CMD_PREV contained command even if it was skipped
@@ -366,7 +373,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.9.1"
+ME_VERSION="1.9.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -374,11 +381,12 @@ DEFAULT_SOURCE='/path/of/source'
 DEFAULT_TARGET='scheme://user[:password]@host[:port]/[/]path'
 DEFAULT_TARGET_USER='_backend_username_'
 DEFAULT_TARGET_PASS='_backend_password_'
+DEFAULT_GPG='gpg'
 DEFAULT_GPG_KEY='_KEY_ID_'
 DEFAULT_GPG_PW='_GPG_PASSWORD_'
 
 # function definitions ##########################
-function set_config { # sets config vars
+function set_config { # sets global config vars
   local CONFHOME_COMPAT="$HOME/.ftplicity"
   local CONFHOME="$HOME/.duply"
   local CONFHOME_ETC_COMPAT="/etc/ftplicity"
@@ -438,12 +446,15 @@ END
 function using_info {
   duplicity_version_get
   # freebsd awk (--version only), debian mawk (-W version only), deliver '' so awk does not wait for input
-  AWK_VERSION=$((awk --version '' 2>/dev/null || awk -W version '' 2>/dev/null) | awk '/.+/{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);print $0;exit}')
-  PYTHON_VERSION=$(python -V 2>&1| awk '{print tolower($0);exit}')
-  GPG_INFO=`gpg --version 2>/dev/null| awk '/^gpg/{v=$1" "$3};/^Home/{print v" ("$0")"}'`
-  BASH_VERSION=$(bash --version | awk '/^GNU bash, version/{sub(/GNU bash, version[ ]+/,"",$0);print $0}')
-  echo -e "Using installed duplicity version ${DUPL_VERSION:-(not found)}${PYTHON_VERSION+, $PYTHON_VERSION}\
-${GPG_INFO:+, $GPG_INFO}${AWK_VERSION:+, awk '${AWK_VERSION}'}${BASH_VERSION:+, bash '${BASH_VERSION}'}."
+  local AWK_VERSION=$((awk --version '' 2>/dev/null || awk -W version '' 2>/dev/null) | awk '/.+/{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);print $0;exit}')
+  local PYTHON_VERSION=$(python -V 2>&1| awk '{print tolower($0);exit}')
+  local GPG_INFO=$(gpg --version 2>&1| awk 'NR==1{v=$1" "$3};/^Home:/{print v" ("$0")"}' || echo gpg MISSING?)
+  local BASH_VERSION=$(bash --version | awk 'NR==1{IGNORECASE=1;sub(/GNU bash, version[ ]+/,"",$0);print $0}')
+  local GREP_VERSION=$(grep --version | awk 'NR==1{IGNORECASE=1;sub(/grep[ ]+/,"",$0);print $0}')
+  echo -e "Using installed duplicity version ${DUPL_VERSION:-(not found)}\
+${PYTHON_VERSION+, $PYTHON_VERSION${PYTHONPATH:+ 'PYTHONPATH=$PYTHONPATH'}}\
+${GPG_INFO:+, $GPG_INFO}${AWK_VERSION:+, awk '${AWK_VERSION}'}${GREP_VERSION:+, grep '${GREP_VERSION}'}\
+${BASH_VERSION:+, bash '${BASH_VERSION}'}."
 }
 
 function usage_info { # print usage information
@@ -488,8 +499,8 @@ PROFILE:
   Superuser root can place profiles under '/etc/${ME_NAME}'. Simply create
   the folder manually before running $ME as superuser.
   Note:  
-    Already existing profiles in root's profile folder will cease to work
-    unless there are moved to the new location manually.
+    Already existing profiles in root's home folder will cease to work
+    unless they are moved to the new location manually.
 
   example 1:   $ME humbug backup
 
@@ -590,12 +601,12 @@ PRE/POST SCRIPTS:
 
 EXAMPLES:
   create profile 'humbug':  
-    $ME humbug create (now edit the resulting conf file)
+    $ME humbug create (don't forget to edit this new conf file)
   backup 'humbug' now:  
     $ME humbug backup
   list available backup sets of profile 'humbug':  
     $ME humbug status
-  list and delete obsolete backup archives of 'humbug':  
+  list and delete outdated backups of 'humbug':  
     $ME humbug purge --force
   restore latest backup of 'humbug' to /mnt/restore:  
     $ME humbug restore /mnt/restore
@@ -604,6 +615,8 @@ EXAMPLES:
     (see "duplicity manpage", section TIME FORMATS)
   a one line batch job on 'humbug' for cron execution:  
     $ME humbug backup_verify_purge --force
+  batch job to run a full backup with pre/post scripts:  
+    $ME humbug pre_full_post
 
 FILES:
   in profile folder '~/.${ME_NAME}/<profile>' or '/etc/${ME_NAME}'
@@ -668,55 +681,38 @@ GPG_PW='${DEFAULT_GPG_PW}'
 # NOTE: available since duplicity 0.6.14, translates to SIGN_PASSPHRASE
 #GPG_PW_SIGN='<signpass>'
 
+# uncomment and set a file path or name force duply to use this gpg executable
+# available in duplicity 0.7.04 and above (currently unreleased 06/2015)
+#GPG='/usr/local/gpg-2.1/bin/gpg'
+
 # gpg options passed from duplicity to gpg process (default='')
 # e.g. "--trust-model pgp|classic|direct|always" 
 #   or "--compress-algo=bzip2 --bzip2-compress-level=9"
 #   or "--personal-cipher-preferences AES256,AES192,AES..."
 #   or "--homedir ~/.duply" - keep keyring and gpg settings duply specific
+#   or "--pinentry-mode loopback" - needed for GPG 2.1+ _and_
+#      also enable allow-loopback-pinentry in your .gnupg/gpg-agent.conf
 #GPG_OPTS=''
 
 # disable preliminary tests with the following setting
 #GPG_TEST='disabled'
 
-# credentials & server address of the backup target (URL-Format)
-# syntax is
-#   scheme://[user:password@]host[:port]/[/]path
-# for details see duplicity manpage, section URL Format
-#   http://duplicity.nongnu.org/duplicity.1.html#sect8
-# probably one out of
-#   # for cloudfiles backend user id is CLOUDFILES_USERNAME, password is 
-#   # CLOUDFILES_APIKEY, you might need to set CLOUDFILES_AUTHURL manually
-#   cf+http://[user:password@]container_name
-#   dpbx:///some_dir
-#   file://[relative|/absolute]/local/path
-#   ftp[s]://user[:password]@other.host[:port]/some_dir
-#   gdocs://user[:password]@other.host/some_dir
-#   # for the google cloud storage (since duplicity 0.6.22)
-#   # user/password are GS_ACCESS_KEY_ID/GS_SECRET_ACCESS_KEY
-#   gs://bucket[/prefix] 
-#   hsi://user[:password]@other.host/some_dir
-#   imap[s]://user[:password]@host.com[/from_address_prefix]
-#   mega://user[:password]@mega.co.nz/some_dir
-#   rsync://user[:password]@host.com[:port]::[/]module/some_dir
-#   # rsync over ssh (only keyauth)
-#   rsync://user@host.com[:port]/[relative|/absolute]_path
-#   # for the s3 user/password are AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
-#   s3://[user:password@]host/bucket_name[/prefix]
-#   s3+http://[user:password@]bucket_name[/prefix]
-#   # scp and sftp are aliases for the ssh backend
-#   ssh://user[:password]@other.host[:port]/[/]some_dir
-#   # for authenticated swift define TARGET_USER or SWIFT_USERNAME,
-#   # TARGET_PASS or SWIFT_PASSWORD, SWIFT_AUTHURL (mandatory, the path to 
-#   # your identity service, omitting leads to an error with swift),
-#   # optionally SWIFT_AUTHVERSION (which defaults to "1")
-#   swift://container_name
-#   tahoe://alias/directory
-#   webdav[s]://user[:password]@other.host/some_dir
-# ATTENTION: characters other than A-Za-z0-9.-_.~ in the URL have 
-#            to be replaced by their url encoded pendants, see
-#            http://en.wikipedia.org/wiki/Url_encoding 
-#            if you define the credentials as TARGET_USER, TARGET_PASS below 
-#            duply will try to url_encode them for you if the need arises
+# backend, credentials & location of the backup target (URL-Format)
+# generic syntax is
+#   scheme://[user[:password]@]host[:port]/[/]path
+# eg.
+#   sftp://bob:secret@backupserver.com//home/bob/dupbkp
+# for details and available backends see duplicity manpage, section URL Format
+#   http://duplicity.nongnu.org/duplicity.1.html#sect7
+# NOTE:
+#   some backends (eg. cloudfiles) need additional env vars to be set to
+#   work properly, when in doubt consult the man page mentioned above.
+# ATTENTION:
+#   characters other than A-Za-z0-9.-_.~ in the URL have to be
+#   replaced by their url encoded pendants, see
+#     http://en.wikipedia.org/wiki/Url_encoding
+#   if you define the credentials as TARGET_USER, TARGET_PASS below $ME
+#   will try to url_encode them for you if the need arises.
 TARGET='${DEFAULT_TARGET}'
 # optionally the username/password can be defined as extra variables
 # setting them here _and_ in TARGET results in an error
@@ -1016,6 +1012,17 @@ function run_cmd {
   return $CMD_ERR
 }
 
+# wrap grep to override possible env set GREP_OPTIONS=--color=always
+function grep {
+  command grep --color=never "$@"
+}
+
+# a lookup function for executables working with names or file paths
+function lookup {
+  local bin="$1"
+  ( [ "${bin##*/}" == "$bin" ] && hash "$bin" 2>/dev/null ) || [ -x "$bin" ]
+}
+
 function qw { quotewrap "$@"; }
 
 function quotewrap {
@@ -1102,7 +1109,7 @@ function duplify { # the actual wrapper function
   var_isset 'PREVIEW' && local RUN=echo || local RUN=eval
 $RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
  ${DUPL_PRECMD} duplicity $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
- $GPG_USEAGENT $DUPL_CMD_PARAMS ${PREVIEW:+}
+ $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS ${PREVIEW:+}
 
   local ERR=$?
   return $ERR
@@ -1268,7 +1275,7 @@ function gpg_import {
       FOUND=1
       
       CMD_MSG="Import keyfile '$FILE' to keyring"
-      run_cmd "$GPG" $GPG_OPTS --batch --import "$FILE"
+      run_cmd gpg $GPG_OPTS --batch --import "$FILE"
       if [ "$?" != "0" ]; then 
         warning "Import failed.${CMD_OUT:+\n$CMD_OUT}"
         ERR=1
@@ -1284,7 +1291,7 @@ function gpg_import {
 
   # try to set trust automagically
   CMD_MSG="Autoset trust of key '$KEY_ID' to ultimate"
-  run_cmd echo $(gpg_fingerprint "$KEY_ID"):6: \| "$GPG" $GPG_OPTS --import-ownertrust --batch --logger-fd 1
+  run_cmd echo $(gpg_fingerprint "$KEY_ID"):6: \| gpg $GPG_OPTS --import-ownertrust --batch --logger-fd 1
   if [ "$?" = "0" ] && [ -z "$PREVIEW" ]; then 
    # success on all levels, we're done
    return $ERR
@@ -1295,14 +1302,14 @@ function gpg_import {
 with the command \"trust\" to \"ultimate\" (5) now.
 Exit the edit mode of gpg with \"quit\"."
   CMD_MSG="Running gpg to manually edit key '$KEY_ID'"
-  run_cmd sleep 5\; "$GPG" $GPG_OPTS --edit-key "$KEY_ID"
+  run_cmd sleep 5\; gpg $GPG_OPTS --edit-key "$KEY_ID"
 
   return $ERR
 }
 
 # see 'How to specify a user ID' on gpg manpage
 function gpg_fingerprint {
-  local PRINT=$("$GPG" $GPG_OPTS --fingerprint "$1" 2>&1|awk -F= 'NR==2{gsub(/ /,"",$2);$2=toupper($2); if ( $2 ~ /^[A-F0-9]+$/ && length($2) == 40 ) print $2; else exit 1}') \
+  local PRINT=$(gpg $GPG_OPTS --fingerprint "$1" 2>&1|awk -F= 'NR==2{gsub(/ /,"",$2);$2=toupper($2); if ( $2 ~ /^[A-F0-9]+$/ && length($2) == 40 ) print $2; else exit 1}') \
     && [ -n "$PRINT" ] && echo $PRINT && return 0
   return 1
 }
@@ -1317,7 +1324,9 @@ function gpg_export_if_needed {
       if [ ! -f "$FILE" ] && eval gpg_$(tolower $KEY_TYPE)_avail \"$KEY_ID\"; then
         # exporting
         CMD_MSG="Export $KEY_TYPE key '$KEY_ID'"
-        run_cmd $GPG $GPG_OPTS --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)"" $(qw $KEY_ID) >> \"$TMPFILE\""
+        # gpg2.1 insists on passphrase here, gpg2.0- happily exports w/o it
+        # we pipe an empty string when GPG_PW is not set to avoid gpg silently waiting for input
+        run_cmd echo $(qw $GPG_PW) \| gpg $GPG_OPTS --passphrase-fd 0 --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)"" $(qw $KEY_ID) >> \"$TMPFILE\""
         CMD_ERR=$?
 
         if [ "$CMD_ERR" = "0" ]; then
@@ -1359,9 +1368,9 @@ function gpg_key_cache {
     return 255
   elif ! var_isset "$CACHE"; then
     if [ "$MODE" = "PUB" ]; then
-      RES=$("$GPG" $GPG_OPTS --list-key "$KEYID" > /dev/null 2>&1; echo -n $?)
+      RES=$(gpg $GPG_OPTS --list-key "$KEYID" > /dev/null 2>&1; echo -n $?)
     elif [ "$MODE" = "SEC" ]; then
-      RES=$("$GPG" $GPG_OPTS --list-secret-key "$KEYID" > /dev/null 2>&1; echo -n $?)
+      RES=$(gpg $GPG_OPTS --list-secret-key "$KEYID" > /dev/null 2>&1; echo -n $?)
     else
       return 255
     fi
@@ -1463,6 +1472,27 @@ function gpg_agent_avail {
   return $ERR
 }
 
+function gpg_custom_binary {
+  var_isset GPG && [ "$GPG" != "$DEFAULT_GPG" ] &&\
+    echo "--gpg-binary $(qw "$GPG")"
+}
+
+function gpg_binary {
+  local BIN
+  var_isset GPG && BIN="$GPG" || BIN="$DEFAULT_GPG"
+  echo "$BIN"
+}
+
+function gpg_avail {
+  lookup $(gpg_binary)
+}
+
+# enforce the use our selected gpg binary
+function gpg {
+  command $(gpg_binary) "$@"
+}
+export -f gpg
+
 # start of script #######################################################################
 
 # confidentiality first, all we create is only readable by us
@@ -1471,10 +1501,24 @@ umask 077
 # check if ftplicity is there & executable
 [ -n "$ME_LONG" ] && [ -x "$ME_LONG" ] || error "$ME missing. Executable & available in path? ($ME_LONG)"
 
+# check system environment
+
+# is duplicity avail
+lookup duplicity || error_path "duplicity missing. installed und available in path?"
+# init, exec duplicity version check info
+duplicity_version_get
+duplicity_version_check
+
+# check for certain important helper programs
+for f in awk grep; do
+  lookup "$f" || \
+    error_path "$f missing. installed und available in path?"
+done
+
 if [ ${#@} -eq 1 ]; then
-	cmd="${1}"
+  cmd="${1}"
 else
-	FTPLCFG="${1}" ; cmd="${2}"
+  FTPLCFG="${1}" ; cmd="${2}"
 fi
 
 # deal with command before profile validation calls
@@ -1514,6 +1558,11 @@ Hint:
     exit 0
     ;;
   version|-version|--version|-v|-V)
+    # profile can override GPG, so import it if it was given
+    var_isset FTPLCFG && {
+      set_config
+      [ -r "$CONF" ] && . "$CONF" || warning "Cannot import config '$CONF'."
+    }
     version_info_using
     exit 0
     ;;
@@ -1535,15 +1584,6 @@ esac
 
 # Hello world
 echo "Start $ME v$ME_VERSION, time is $(date_fix '%F %T')."
-
-# check system environment
-DUPLICITY="$(which duplicity 2>/dev/null)"
-[ -z "$DUPLICITY" ] && error_path "duplicity missing. installed und available in path?"
-# init, exec duplicity version check info
-duplicity_version_get
-duplicity_version_check
-
-[ -z "$(which awk 2>/dev/null)" ] && error_path "awk missing. installed und available in path?"
 
 ### read configuration
 set_config
@@ -1609,12 +1649,6 @@ TARGET_SPLIT_URL=$(echo $TARGET | awk '{ \
      print "TARGET_URL_PASS=$(url_decode \047"pass"\047)\n"}\
   }')
 eval ${TARGET_SPLIT_URL}
-
-# check if backend specific software is in path
-[ -n "$(echo ${TARGET_URL_PROT} | grep -i -e '^ftp://$')" ] && \
-  [ -z "$(which ncftp 2>/dev/null)" ] && error_path "Protocol 'ftp' needs ncftp. Installed und available in path?" 
-[ -n "$(echo ${TARGET_URL_PROT} | grep -i -e '^ftps://$')" ] && \
-  [ -z "$(which lftp 2>/dev/null)" ] && error_path "Protocol 'ftps' needs lftp. Installed und available in path?"
 
 # fetch commmand from parameters ########################################################
 # Hint: cmds is also used to check if authentification info sufficient in the next step 
@@ -1727,10 +1761,8 @@ fi
 
 # GPG availability check (now we know if gpg is really needed)#################
 if ! gpg_disabled; then 
-	GPG="$(which gpg 2>/dev/null)"
-	[ -z "$GPG" ] && error_path "gpg missing. installed und available in path?"
+  gpg_avail || error_path "gpg '$(gpg_binary)' missing. installed und available in path?"
 fi
-
 
 # Output versions info ########################################################
 using_info
@@ -1867,7 +1899,7 @@ echo $@ $DUPL_PARAMS | grep -q -e '--asynchronous-upload' && FACTOR=2 || FACTOR=
 
 # TODO: check for enough (async= upload space and WARN only
 #       use function tmp_space 
-echo TODO: reimplent tmp space check
+#echo TODO: reimplent tmp space check
 
 
 # test - GPG SANITY #####################################################################
@@ -1898,7 +1930,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
   done
   # check encrypting
   CMD_MSG="Test - Encrypt to '$(join "','" "${GPG_KEYS_ENC_ARRAY[@]}")'${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) $GPG $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
+  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
   CMD_ERR=$?
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -1912,7 +1944,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
   # check decrypting
   CMD_MSG="Test - Decrypt"
   gpg_key_decryptable || CMD_DISABLED="No matching secret key available."
-  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $(gpg_param_passwd GPG_PW) $GPG_OPTS -o "${GPG_TEST}_DEC" $GPG_USEAGENT -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $(gpg_param_passwd GPG_PW) $GPG_OPTS -o "${GPG_TEST}_DEC" $GPG_USEAGENT -d "${GPG_TEST}_ENC"
   CMD_ERR=$?
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -1923,7 +1955,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
 else
   # check encrypting
   CMD_MSG="Test - Encryption with passphrase${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o "${GPG_TEST}_ENC" --batch -c "$ME_LONG"
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o "${GPG_TEST}_ENC" --batch -c "$ME_LONG"
   CMD_ERR=$?
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Encryption failed.${CMD_OUT:+\n$CMD_OUT}"
@@ -1931,7 +1963,7 @@ else
 
   # check decrypting
   CMD_MSG="Test - Decryption with passphrase"
-  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $GPG_OPTS --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch -d "${GPG_TEST}_ENC"
   CMD_ERR=$?
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Decryption failed.${CMD_OUT:+\n$CMD_OUT}"
@@ -2220,7 +2252,8 @@ case "$(tolower $cmd)" in
 esac
 
 CMD_ERR=$?
-RUN_END=$(date_fix %s)$(nsecs) ; RUNTIME=$(( $RUN_END - $RUN_START ))
+RUN_END=$(date_fix %s)$(nsecs)
+RUNTIME=$(( $RUN_END - $RUN_START ))
 
 # print message on error; set error code
 if [ "$CMD_ERR" -ne 0 ]; then
