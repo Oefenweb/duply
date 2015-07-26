@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                           #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.   #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany           #
-#  (c) 2008-2011 Edgar Soldin (changes since version 1.3)                     #
+#  (c) 2008-2012 Edgar Soldin (changes since version 1.3)                     #
 ###############################################################################
 #  LICENSE:                                                                   #
 #  This program is licensed under GPLv2.                                      #
@@ -41,7 +41,12 @@
 #  versioning scheme will be simplified to [major].[minor].[patch] version
 #  with the next minor version raise
 #
-#  1.5.5.4 (16.10.2010)
+#  1.5.5.5 (4.2.2012)
+#  - bugfix 3479605: SEL context confused profile folder's permission check
+#  - colon ':' in url passphrase got ignored, added python driven url_decoding
+#    for user & pass to better process special chars
+#
+#  1.5.5.4 (16.10.2011)
 #  - bugfix 3421268: SFTP passwords from conf ignored and always prompted for
 #  - add support for separate sign passphrase (needs duplicity 0.6.14+)
 #
@@ -279,7 +284,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.5.4"
+ME_VERSION="1.5.5.5dev"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -939,7 +944,7 @@ $RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
 function secureconf { # secure the configuration dir
 	#PERMS=$(ls -la $(dirname $CONFDIR) | grep -e " $(basename $CONFDIR)\$" | awk '{print $1}')
 	local PERMS="$(ls -la "$CONFDIR/." | awk 'NR==2{print $1}')"
-	if [ "$PERMS" != 'drwx------' ] ; then
+	if [ "${PERMS/#drwx------*/OK}" != 'OK' ] ; then
 		chmod u+rwX,go= "$CONFDIR"; local ERR=$?
 		warning "The profile's folder 
 '$CONFDIR'
@@ -1006,9 +1011,14 @@ function var_isset {
 }
 
 function url_encode {
-	# utilize python, silently do nothing on error - because no python no duplicity
-	OUT=$(python -c "import urllib; print urllib.quote('$1')" 2>/dev/null ); ERR=$?
-	[ "$ERR" -eq 0 ] && echo $OUT || echo $1
+  # utilize python, silently do nothing on error - because no python no duplicity
+  OUT=$(python -c "import urllib; print urllib.${2}quote('$1')" 2>/dev/null ); ERR=$?
+  [ "$ERR" -eq 0 ] && echo $OUT || echo $1
+}
+
+function url_decode {
+  # reuse function above with a simple string param hack
+  url_encode "$1" "un"
 }
 
 function toupper {
@@ -1311,11 +1321,16 @@ secureconf
 # split TARGET in handy variables
 TARGET_SPLIT_URL=$(echo $TARGET | awk '{ \
   target=$0; match(target,/^([^\/:]+):\/\//); \
-  prot=substr(target,RSTART,RLENGTH);rest=substr(target,RSTART+RLENGTH); \
+  prot=substr(target,RSTART,RLENGTH);\
+  rest=substr(target,RSTART+RLENGTH); \
   if (credsavail=match(rest,/^[^@]*@/)){\
     creds=substr(rest,RSTART,RLENGTH-1);\
     credcount=split(creds,cred,":");\
     rest=substr(rest,RLENGTH+1);\
+    # split creds with regexp\
+    match(creds,/^([^:]+)/);\
+    user=substr(creds,RSTART,RLENGTH);\
+    pass=substr(creds,RSTART+1+RLENGTH);\
   };\
   # filter quotes or escape them\
   gsub(/[\047\042]/,"",prot);\
@@ -1324,15 +1339,14 @@ TARGET_SPLIT_URL=$(echo $TARGET | awk '{ \
   print "TARGET_URL_PROT=\047"prot"\047\n"\
          "TARGET_URL_HOSTPATH=\047"rest"\047\n"\
          "TARGET_URL_CREDS=\047"creds"\047\n";\
-   if(credsavail){\
-     gsub(/[\047]/,"\047\\\047\047",cred[1]);\
-     print "TARGET_URL_USER=\047"cred[1]"\047\n"}\
-   if(credcount>1){\
-     gsub(/[\047]/,"\047\\\047\047",cred[2]);\
-     print "TARGET_URL_PASS=\047"cred[2]"\047\n"}\
+   if(user){\
+     gsub(/[\047]/,"\047\\\047\047",user);\
+     print "TARGET_URL_USER=\047"user"\047\n"}\
+   if(pass){\
+     gsub(/[\047]/,"\047\\\047\047",pass);\
+     print "TARGET_URL_PASS=$(url_decode \047"pass"\047)\n"}\
   }')
 eval ${TARGET_SPLIT_URL}
-
 
 # check if backend specific software is in path
 [ -n "$(echo ${TARGET_URL_PROT} | grep -i -e '^ftp://$')" ] && \
