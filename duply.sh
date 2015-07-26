@@ -44,6 +44,9 @@
 #
 #
 #  CHANGELOG:
+#  1.5.3.1
+#  - as of 1.5.3 already, new ARCH_DIR config option
+#
 #  1.5.3 (1.11.2010)
 #  - bugfix 3056628: improve busybox compatibility, grep did not have -m param
 #  - bugfix 2995408: allow empty password for PGP key
