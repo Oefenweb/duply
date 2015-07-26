@@ -1468,7 +1468,6 @@ if ( ( ! var_isset 'TARGET_USER' && ! var_isset 'TARGET_URL_USER' ) && \
   #   protocols that do not need passwords
   #   s3[+http] only needs password for write operations
   #   u1[+http] can ask for creds and create an oauth token
-  echo "'$(tolower "${TARGET_URL_PROT}")'"
   if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(file\|tahoe\|ssh\|scp\|sftp\|u1\(\+http\)\?\)://$')" ]; then
     : # all is well file/tahoe do not need passwords, ssh might use key auth
   elif [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^s3\(\+http\)\?://$')" ] && \
@@ -1723,7 +1722,7 @@ gpg_export_if_needed "${GPG_KEYS_ENC[@]} $(gpg_signing && echo $GPG_KEY_SIGN)"
 
 # command execution #####################################################################
 
-# unquote url vars
+# urldecode url vars into plain text
 var_isset 'TARGET_URL_USER' && TARGET_URL_USER="$(url_decode "$TARGET_URL_USER")"
 var_isset 'TARGET_URL_PASS' && TARGET_URL_PASS="$(url_decode "$TARGET_URL_PASS")"
 
