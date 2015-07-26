@@ -38,6 +38,9 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  1.5.8 ()
+#  - bugfix 3575487: implement proper cloud files support
+#
 #  1.5.7 (10.06.2012)
 #  - bugfix 3531450: Cannot use space in target URL (file:///) anymore
 #
@@ -293,7 +296,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.7"
+ME_VERSION="1.5.8"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -568,18 +571,21 @@ GPG_PW='${DEFAULT_GPG_PW}'
 # syntax is
 #   scheme://[user:password@]host[:port]/[/]path
 # probably one out of
+#   # for cloudfiles backend user id is CLOUDFILES_USERNAME, password is 
+#   # CLOUDFILES_APIKEY, you might need to set CLOUDFILES_AUTHURL manually
+#   cf+http://[user:password@]container_name
 #   file://[/absolute_]path
 #   ftp[s]://user[:password]@other.host[:port]/some_dir
+#   gdocs://user[:password]@other.host/some_dir 
 #   hsi://user[:password]@other.host/some_dir
-#   cf+http://container_name
 #   imap[s]://user[:password]@host.com[/from_address_prefix]
 #   rsync://user[:password]@other.host[:port]::/module/some_dir
 #   # rsync over ssh (only keyauth)
 #   rsync://user@other.host[:port]/relative_path
 #   rsync://user@other.host[:port]//absolute_path
 #   # for the s3 user/password are AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
-#   s3://[user:password]@host/bucket_name[/prefix]
-#   s3+http://[user:password]@bucket_name[/prefix]
+#   s3://[user:password@]host/bucket_name[/prefix]
+#   s3+http://[user:password@]bucket_name[/prefix]
 #   # scp and sftp are aliases for the ssh backend
 #   ssh://user[:password]@other.host[:port]/some_dir
 #   tahoe://alias/directory
@@ -588,7 +594,7 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #            to be replaced by their url encoded pendants, see
 #            http://en.wikipedia.org/wiki/Url_encoding 
 #            if you define the credentials as TARGET_USER, TARGET_PASS below 
-#            duply will url_encode them for you
+#            duply will try to url_encode them for you if needed
 TARGET='${DEFAULT_TARGET}'
 # optionally the username/password can be defined as extra variables
 # setting them here _and_ in TARGET results in an error
@@ -1233,20 +1239,6 @@ fi
 # OR fall through
 ##if [ ${#@} -le 2 ]; then
 case "$cmd" in
-  version|-version|--version|-v|-V)
-    version_info_using
-    exit 0
-    ;;
-  usage|-help|--help|-h|-H)
-    set_config
-    usage_info
-    exit 0
-    ;;
-  txt2man)
-    set_config
-    usage_txt2man
-    exit 0
-    ;;
   changelog)
     changelog
     exit 0
@@ -1266,13 +1258,30 @@ Hint:
       exit 0
     fi
     ;;
+  txt2man)
+    set_config
+    usage_txt2man
+    exit 0
+    ;;
+  usage|-help|--help|-h|-H)
+    set_config
+    usage_info
+    exit 0
+    ;;
+  version|-version|--version|-v|-V)
+    version_info_using
+    exit 0
+    ;;
+  # fallthrough.. we got a command that needs an existing profile
   *)
     # if we reach here, user either forgot profile or chose wrong profileless command
     if [ ${#@} -le 1 ]; then
       error "\
  Missing or wrong parameters. 
- Only the commands usage, version and create can be called without selecting 
- an existing profile first. Your command was '$cmd'.
+ Only the commands 
+   changelog, create, usage, txt2man, version
+ can be called without selecting an existing profile first.
+ Your command was '$cmd'.
 
  Hint: Run '$ME usage' to get help."
     fi
@@ -1438,9 +1447,9 @@ if ( ( ! var_isset 'TARGET_USER' && ! var_isset 'TARGET_URL_USER' ) && \
   # ok here some exceptions:
   #   protocols that do not need passwords
   #   s3[+http] only needs password for write operations
-  if [ -n "$(echo ${TARGET_URL_PROT} | grep -e '^\(file\|tahoe\|ssh\|scp\)://$')" ]; then
-    : # all is well file/tahoe do not need passwords, ssh/scp might use key auth
-  elif [ -n "$(echo ${TARGET_URL_PROT} | grep -e '^s3\(\+http\)\?://$')" ] && \
+  if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(file\|tahoe\|ssh\|scp\|sftp\)://$')" ]; then
+    : # all is well file/tahoe do not need passwords, ssh might use key auth
+  elif [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^s3\(\+http\)\?://$')" ] && \
      [ -z "$(echo ${cmds} | grep -e '\(bkp\|incr\|full\|purge\|cleanup\)')" ]; then
     : # still fine, it's possible to read only access configured buckets anonymously
   else
@@ -1698,25 +1707,42 @@ var_isset 'TARGET_USER' && TARGET_URL_USER="$TARGET_USER"
 var_isset 'TARGET_PASS' && TARGET_URL_PASS="$TARGET_PASS"
 
 # build target backend data depending on protocol
-case "${TARGET_URL_PROT%%:*}" in
+case "$(tolower "${TARGET_URL_PROT%%:*}")" in
 	's3'|'s3+http')
 		BACKEND_PARAMS="AWS_ACCESS_KEY_ID='${TARGET_URL_USER}' AWS_SECRET_ACCESS_KEY='${TARGET_URL_PASS}'"
 		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
 		;;
-	'file'|'tahoe')
+	'cf+http')
+		# respect possibly set cloudfile env vars
+		var_isset 'CLOUDFILES_USERNAME' && TARGET_URL_USER="$CLOUDFILES_USERNAME"
+		var_isset 'CLOUDFILES_APIKEY' && TARGET_URL_PASS="$CLOUDFILES_APIKEY"
+		# add them to duplicity params
+		var_isset 'TARGET_URL_USER' && \
+			BACKEND_PARAMS="CLOUDFILES_USERNAME=$(qw "${TARGET_URL_USER}")"
+		var_isset 'TARGET_URL_PASS' && \
+			BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_APIKEY=$(qw "${TARGET_URL_PASS}")"
+		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+		# info on missing AUTH_URL
+		if ! var_isset 'CLOUDFILES_AUTHURL'; then
+			echo -e "INFO: No CLOUDFILES_AUTHURL defined (in conf).\n      Will use default from python-cloudfiles (probably rackspace)."
+		else
+			BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_AUTHURL=$(qw "${CLOUDFILES_AUTHURL}")"
+		fi
+		;;
+		'file'|'tahoe')
 		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
 		;;
 	'rsync')
 		# everything in url (this backend does not support pass in env var)
 		# this is obsolete from version 0.6.10 (buggy), hopefully in 0.6.11
 		# print warning older version is detected
-		var_isset 'TARGET_URL_USER' && BACKEND_CREDS="$(url_encode ${TARGET_URL_USER})"
+		var_isset 'TARGET_URL_USER' && BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")"
 		if duplicity_version_lt 610; then
 			warning "\
 Duplicity version '$DUPL_VERSION' does not support providing the password as 
 env var for rsync backend. For security reasons you should consider to 
 update to a version greater than '0.6.10' of duplicity."
-			var_isset 'TARGET_URL_PASS' && BACKEND_CREDS="${BACKEND_CREDS}:$(url_encode ${TARGET_URL_PASS})"
+			var_isset 'TARGET_URL_PASS' && BACKEND_CREDS="${BACKEND_CREDS}:$(url_encode "${TARGET_URL_PASS}")"
 		else
 			var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
 		fi
@@ -1727,9 +1753,9 @@ update to a version greater than '0.6.10' of duplicity."
 		# all protocols with username in url, only username is in url, 
 		# pass is env var for secúrity, url_encode username to protect special chars
 		var_isset 'TARGET_URL_USER' && 
-			BACKEND_CREDS="$(url_encode ${TARGET_URL_USER})@"
+			BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")@"
 		# sortout backends way to handle password
-		case "${TARGET_URL_PROT%%:*}" in
+		case "$(tolower "${TARGET_URL_PROT%%:*}")" in
 			'imap'|'imaps')
 				var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
 			;;
