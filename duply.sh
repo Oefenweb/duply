@@ -30,7 +30,7 @@
 #                                             --old-filenames
 #          - add 'exclude_<command>' list usage eg. exclude_verify
 #          - add 'pre/post_<command>' script support
-#          - check success of commands and react in batches e.g. 
+#          - bugfix 3042778: check success of commands and react in batches e.g. 
 #            backup_AND_verify_AND_purge, pre_and_bkp_and_post
 #          - a download/install duplicity option
 #          - bug: on key import it tries to import again and fails because 
@@ -44,13 +44,14 @@
 #
 #
 #  CHANGELOG:
-#  1.5.2.4rc1 (1.11.2010)
+#  1.5.3 (1.11.2010)
 #  - bugfix 3056628: improve busybox compatibility, grep did not have -m param
 #  - bugfix 2995408: allow empty password for PGP key
 #  - bugfix 2996459: Duply erroneously escapes '-' symbol in username
-#  - minor fixes/changes to url_encode function
+#  - url_encode function is now pythonized
 #  - rsync uses FTP_PASSWORD now if duplicity 0.6.10+ , else issue warning
-#  - feature 3059262: Make pre and post aware of parameters, internal parameters + CMD of pre or post 
+#  - feature 3059262: Make pre and post aware of parameters, 
+#                     internal parameters + CMD of pre or post 
 #
 #  1.5.2.3 (16.4.2010)
 #  - bugfix: date again, should now work virtually anywhere
@@ -229,7 +230,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.2.4_dev2"
+ME_VERSION="1.5.3"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -348,6 +349,7 @@ COMMANDS:
               full - if parameter full_if_older matches 
                      or no earlier backup is found
               incremental - in all other cases
+  pre/post:  execute <profile>/$(basename "$PRE"), <profile>/$(basename "$POST") scripts
   bkp:       as above but without executing pre/post scripts
   full:      force full backup
   incr:      force incremental backup
@@ -372,12 +374,17 @@ COMMANDS:
   fetch <src_path> <target_path> [<age>]:
              restore single file/folder from backup 
              [as it was at <age>]
-  pre/post:  execute <profile>/$(basename "$PRE") or <profile>/$(basename "$POST") script
-             (for debugging purposes)  
 
 OPTIONS:
   --force:   passed to duplicity (see commands: purge, purge-full, cleanup)
   --preview: do nothing but print out generated duplicity command lines
+
+PRE/POST SCRIPTS:
+  All internal duply variables will be readable in the script e.g. BACKEND_URL.
+  As a special variable CMD will hold the duply command the pre/post script 
+  was attached to e.g. 'pre_bkp_post_pre_verify_post' will call the pre script 
+  two times, but with CMD variable set to 'bkp' on the first and to 'verify' on 
+  the second run.
 
 EXAMPLES:
   create profile 'humbug':
@@ -436,8 +443,9 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #   imap://user[:password]@host.com[/from_address_prefix]
 #   imaps://user[:password]@host.com[/from_address_prefix]
 #   rsync://user[:password]@other.host[:port]::/module/some_dir
-#   rsync://user[:password]@other.host[:port]/relative_path
-#   rsync://user[:password]@other.host[:port]//absolute_path
+#   # rsync over ssh (only keyauth)
+#   rsync://user@other.host[:port]/relative_path
+#   rsync://user@other.host[:port]//absolute_path
 #   # for the s3 user/password are AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
 #   s3://[user:password]@host/bucket_name[/prefix]
 #   s3+http://[user:password]@bucket_name[/prefix]
@@ -478,6 +486,16 @@ SOURCE='${DEFAULT_SOURCE}'
 # temporary file space. at least the size of the biggest file in backup
 # for a successful restoration process. (default is '/tmp', if not set)
 #TEMP_DIR=/tmp
+
+# Modifies archive-dir option (since v0.6.0) Defines a folder that holds 
+# unencrypted meta data of the backup, enabling new incrementals without the 
+# need to decrypt backend metadata first. If empty or deleted somehow, the 
+# private key and it's password are needed.
+# NOTE: This is confidential data. Put it somewhere safe. It can grow quite 
+#       big over time so you might want to put it not in the home dir.
+# default '~/.cache/duplicity/duply_<profile>/'
+# if set  '\${ARCH_DIR}/<profile>'
+#ARCH_DIR=/some/space/safe/.duply-cache
 
 # sets duplicity --time-separator option (since v0.4.4.RC2) to allow users 
 # to change the time separator from ':' to another character that will work 
@@ -654,20 +672,27 @@ function run_script { # run pre/post scripts
 }
 
 function duplicity_params_global {
-	# already done? return
-	var_isset 'DUPL_PARAMS_GLOBAL' && return
+  # already done? return
+  var_isset 'DUPL_PARAMS_GLOBAL' && return
 
-	# use key only if set in config, else leave it to symmetric encryption
-	[ "$GPG_KEY" == 'disabled' ] && \
-		local DUPL_PARAM_ENC='--no-encryption' \
-		|| \
-		local DUPL_PARAM_ENC=${GPG_KEY:+"--encrypt-key '$GPG_KEY' --sign-key '$GPG_KEY'"} && \
-		local DUPL_ARG_ENC=$(var_isset 'GPG_PW' && echo "PASSPHRASE='$GPG_PW'") && \
-		local GPG_OPTS=${GPG_OPTS:+"--gpg-options '${GPG_OPTS}'"}
+  # use key only if set in config, else leave it to symmetric encryption
+  [ "$GPG_KEY" == 'disabled' ] && \
+    local DUPL_PARAM_ENC='--no-encryption' \
+    || \
+    local DUPL_PARAM_ENC=${GPG_KEY:+"--encrypt-key '$GPG_KEY' --sign-key '$GPG_KEY'"} && \
+    local DUPL_ARG_ENC=$(var_isset 'GPG_PW' && echo "PASSPHRASE='$GPG_PW'") && \
+    local GPG_OPTS=${GPG_OPTS:+"--gpg-options '${GPG_OPTS}'"}
 
-	duplicity_version_ge 601 && local DUPL_NAME="--name 'duply_${NAME}'"
+  # set name for dupl archive folder, since 0.6.0
+  if duplicity_version_ge 601; then
+    local DUPL_ARCHDIR=''
+    if var_isset 'ARCH_DIR'; then
+      DUPL_ARCHDIR="--archive-dir '${ARCH_DIR}'"
+    fi
+      DUPL_ARCHDIR="${DUPL_ARCHDIR} --name 'duply_${NAME}'"
+  fi
 
-DUPL_PARAMS_GLOBAL="${DUPL_NAME} ${DUPL_PARAM_ENC} \
+DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
  --verbosity '${VERBOSITY:-4}' \
  ${GPG_OPTS}"
 
@@ -1246,8 +1271,10 @@ $( var_isset 'RSYNC_WRKRND' && var_isset 'TARGET_URL_PASS' && echo $(url_encode 
 		BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
 		;;
 esac
-# protect eval from special chars in url (e.g. open ')' in password)
+# protect eval from special chars in url (e.g. open ')' in password, spaces in path)
+SOURCE="'$SOURCE'"
 BACKEND_URL="'$BACKEND_URL'"
+EXCLUDE="'$EXCLUDE'"
 
 # converted cmds to array, lowercase for safety
 CMDS=( $(awk "BEGIN{ cmds=tolower(\"$cmds\"); gsub(/_/,\" \",cmds); print cmds }") )
