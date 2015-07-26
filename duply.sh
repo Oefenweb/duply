@@ -37,7 +37,13 @@
 #    e.g. backup_AND_verify_AND_purge, pre_and_bkp_and_post
 #  - import/export profile from/to .tgz function !!!
 #
+#
 #  CHANGELOG:
+#  1.5.11 (19.07.2013)
+#  - purge-incr command for remove-all-inc-of-but-n-full feature added
+#    patch provided by Moritz Augsburger, thanks!
+#  - documented version command in man page
+#
 #  1.5.10 (26.03.2013)
 #  - minor indent and documentation fixes
 #  - bugfix: exclude filter failed on ubuntu, mawk w/o posix char class support
@@ -465,6 +471,11 @@ COMMANDS:
              full backups and associated incrementals to keep, counting in 
              reverse chronological order)
               [use --force to actually delete these files]
+  purge-incr [<max_fulls_with_incrs>] [--force]  
+             list outdated incremental backups (\$MAX_FULLS_WITH_INCRS being 
+             the number of full backups which associated incrementals will be
+             kept, counting in reverse chronological order) 
+              [use --force to actually delete these files]
   cleanup [--force]  
              list broken backup chain files archives (e.g. after unfinished run)
               [use --force to actually delete these files]
@@ -473,6 +484,7 @@ COMMANDS:
   txt2man    feature for package maintainers - create a manpage based on the 
              usage output. download txt2man from http://mvertes.free.fr/, put 
              it in the PATH and run '$ME txt2man' to create a man page.
+  version    show version information of $ME and needed programs
 
 OPTIONS:
   --force    passed to duplicity (see commands: purge, purge-full, cleanup)
@@ -630,6 +642,11 @@ SOURCE='${DEFAULT_SOURCE}'
 # Number of full backups to keep. Used for the "purge-full" command. 
 # See duplicity man page, action "remove-all-but-n-full".
 #MAX_FULL_BACKUPS=1
+
+# Number of full backups for which incrementals will be kept for.
+# Used for the "purge-incr" command.
+# See duplicity man page, action "remove-all-inc-of-but-n-full".
+#MAX_FULLS_WITH_INCRS=1
 
 # activates duplicity --full-if-older-than option (since duplicity v0.4.4.RC3) 
 # forces a full backup if last full backup reaches a specified age, for the 
@@ -1872,6 +1889,13 @@ case "$cmd" in
     [ -z "$MAX_FULL_BACKUPS" ] && error "  Missing parameter <max_full_backups>. Can be set in profile or as command line parameter."
   
     duplify remove-all-but-n-full "${MAX_FULL_BACKUPS}" \
+          -- "${dupl_opts[@]}" "$BACKEND_URL"
+    ;;
+  purge-incr)
+    MAX_FULLS_WITH_INCRS=${ftpl_pars[0]:-$MAX_FULLS_WITH_INCRS}
+    [ -z "$MAX_FULLS_WITH_INCRS" ] && error "  Missing parameter <max_fulls_with_incrs>. Can be set in profile or as command line parameter."
+  
+    duplify remove-all-inc-of-but-n-full "${MAX_FULLS_WITH_INCRS}" \
           -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
   restore)
