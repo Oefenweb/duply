@@ -30,13 +30,21 @@
 #  - add 'exclude_<command>' list usage eg. exclude_verify
 #  - featreq 25: a download/install duplicity option
 #  - hint on install software if a piece is missing
-#  - featreq 5: Prevent concurrent runs for same profile
-#  - featreq 7: check success of commands and react in batches 
-#    e.g. backup_AND_verify_AND_purge, pre_and_bkp_and_post
 #  - import/export profile from/to .tgz function !!!
 #
 #
 #  CHANGELOG:
+#  1.7.0 (20.3.2014)
+#  - disabled gpg key id plausibility check, too many valid possibilities
+#  - featreq 7 "Halt if precondition fails":
+#     added and(+), or(-) batch command(separator) support
+#  - featreq 26 "pre/post script with shebang line": 
+#     if a script is flagged executable it's executed in a subshell 
+#     now as opposed to sourced to bash, which is the default
+#  - bugfix: do not check if dpbx, swift credentials are set anymore 
+#  - bugfix: properly escape profile name, archdir if used as arguments
+#  - add DUPL_PRECMD conf setting for use with e.g. trickle
+#
 #  1.6.0 (1.1.2014)
 #  - support gs backend
 #  - support dropbox backend
@@ -324,7 +332,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.6.0"
+ME_VERSION="1.7.0"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -431,7 +439,10 @@ USAGE:
     $ME <profile> create
 
   general usage in single or batch mode (see EXAMPLES):  
-    $ME <profile> <command>[_<command>_...] [<options> ...]
+    $ME <profile> <command>[[_|+|-]<command>[_|+|-]...] [<options> ...]
+
+  For batches the conditional separators can also be written as pseudo commands
+  and(+), or(-). See SEPARATORS for details.
 
   Non $ME options are passed on to duplicity (see OPTIONS).
   All conf parameters can also be defined in the environment instead.
@@ -456,9 +467,23 @@ PROFILE:
 
   example 2:   $ME ~/.${ME_NAME}/humbug backup
 
+SEPARATORS:
+  _ (underscore)  
+             neutral separator
+  + (plus sign), _and_  
+             conditional AND
+             the next command will only be executed if the previous succeeded
+  - (minus sign), _or_  
+             conditional OR
+             the next command will only be executed if the previous failed
+
+   example:  
+    'pre_and_bkp_or_verify_post' translates to 'pre+bkp-verify_post
+
 COMMANDS:
   usage      get usage help text
 
+  and/or     pseudo commands for better batch cmd readability (see SEPARATORS)
   create     creates a configuration profile
   backup     backup with pre/post script execution (batch: pre_bkp_post),
               full (if full_if_older matches or no earlier backup is found)
@@ -637,7 +662,7 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #   u1://host_is_ignored/volume_path
 #   u1+http:///volume_path
 #   webdav[s]://user[:password]@other.host/some_dir
-# ATTENTION: characters other than A-Za-z0-9.-_.~ in user,password,path have 
+# ATTENTION: characters other than A-Za-z0-9.-_.~ in the URL have 
 #            to be replaced by their url encoded pendants, see
 #            http://en.wikipedia.org/wiki/Url_encoding 
 #            if you define the credentials as TARGET_USER, TARGET_PASS below 
@@ -650,6 +675,11 @@ TARGET='${DEFAULT_TARGET}'
 
 # base directory to backup
 SOURCE='${DEFAULT_SOURCE}'
+
+# a command that runs duplicity e.g. 
+#  shape bandwidth use via trickle
+#  "trickle -s -u 640 -d 5120" # 5Mb up, 40Mb down"
+#DUPL_PRECMD=""
 
 # exclude folders containing exclusion file (since duplicity 0.5.14)
 # Uncomment the following two lines to enable this setting.
@@ -896,10 +926,16 @@ function run_script { # run pre/post scripts
   local ERR=0
   local SCRIPT="$1"
   if [ ! -z "$PREVIEW" ] ; then	
-    echo $SCRIPT
+    echo "$([ ! -x "$SCRIPT" ] && echo ". ")$SCRIPT"
   elif [ -r "$SCRIPT" ] ; then 
     echo -n "Running '$SCRIPT' "
-    OUT=`. "$SCRIPT" 2>&1`; ERR=$?
+    if [ -x "$SCRIPT" ]; then
+      OUT=$("$SCRIPT" 2>&1)
+      ERR=$?
+    else
+      OUT=$(. "$SCRIPT" 2>&1)
+      ERR=$?
+    fi
     [ $ERR -eq "0" ] && echo "- OK" || echo "- FAILED (code $ERR)"
     echo -en ${OUT:+"Output: $OUT\n"} ;
   else
@@ -968,9 +1004,9 @@ function duplicity_params_global {
   if duplicity_version_ge 601; then
     local DUPL_ARCHDIR=''
     if var_isset 'ARCH_DIR'; then
-      DUPL_ARCHDIR="--archive-dir '${ARCH_DIR}'"
+      DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
     fi
-      DUPL_ARCHDIR="${DUPL_ARCHDIR} --name 'duply_${NAME}'"
+    DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${NAME}")"
   fi
 
 DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
@@ -1016,7 +1052,7 @@ function duplify { # the actual wrapper function
 
   var_isset 'PREVIEW' && local RUN=echo || local RUN=eval
 $RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
- duplicity $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
+ ${DUPL_PRECMD} duplicity $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
  $GPG_USEAGENT $DUPL_CMD_PARAMS ${PREVIEW:+}
 
   local ERR=$?
@@ -1550,7 +1586,7 @@ if ( ( ! var_isset 'TARGET_USER' && ! var_isset 'TARGET_URL_USER' ) && \
   #   protocols that do not need passwords
   #   s3[+http] only needs password for write operations
   #   u1[+http] can ask for creds and create an oauth token
-  if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(file\|tahoe\|ssh\|scp\|sftp\|u1\(\+http\)\?\)://$')" ]; then
+  if [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^\(dpbx\|file\|tahoe\|ssh\|scp\|sftp\|swift\|u1\(\+http\)\?\)://$')" ]; then
     : # all is well file/tahoe do not need passwords, ssh might use key auth
   elif [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^s3\(\+http\)\?://$')" ] && \
      [ -z "$(echo ${cmds} | grep -e '\(bkp\|incr\|full\|purge\|cleanup\)')" ]; then
@@ -1606,15 +1642,16 @@ if [ "$GPG_KEY" == "${DEFAULT_GPG_KEY}" ]; then
 '$CONF'."
 fi
 
-# check gpg keys format
-for KEY_SET_NAME in GPG_KEY GPG_KEYS_ENC $(gpg_signing && echo -n GPG_KEY_SIGN); do
-  eval KEY_SET="\${${KEY_SET_NAME}}"
-  for KEY_ID in $(gpg_split_keyset "$KEY_SET"); do
-    # test format [ ! $(echo $GPG_KEY | grep '^[0-9a-fA-F]\{8\}$') ] not set correct (8 digit ID) or
-    gpg_key_format ${KEY_ID} || \
-      error_gpg "GPG key '${KEY_ID}' set in '${KEY_SET_NAME}' is not \na valid 8 character hex digit string e.g. '012345AB'."
-  done
-done
+# disabled as keys can really be given in too many forms e.g. short/long id, fingerprint, email, name ...
+## check gpg keys format
+#for KEY_SET_NAME in GPG_KEY GPG_KEYS_ENC $(gpg_signing && echo -n GPG_KEY_SIGN); do
+#  eval KEY_SET="\${${KEY_SET_NAME}}"
+#  for KEY_ID in $(gpg_split_keyset "$KEY_SET"); do
+#    # test format [ ! $(echo $GPG_KEY | grep '^[0-9a-fA-F]\{8\}$') ] not set correct (8 digit ID) or
+#    gpg_key_format ${KEY_ID} || \
+#      error_gpg "GPG key '${KEY_ID}' set in '${KEY_SET_NAME}' is not \na valid 8 character hex digit string e.g. '012345AB'."
+#  done
+#done
 
 # create enc gpg keys array, for further processing
 GPG_KEYS_ENC=( $(gpg_split_keyset ${GPG_KEY}) $(gpg_split_keyset ${GPG_KEYS_ENC}) )
@@ -1638,7 +1675,7 @@ if ! gpg_signing; then
 # try first key, if one set
 elif ! var_isset 'GPG_KEY_SIGN'; then
   KEY_ID=${GPG_KEYS_ENC[0]}
-  if ! gpg_key_format "${KEY_ID}"; then
+  if [ -z "${KEY_ID}" ]; then
     echo "Signing disabled. Not GPG_KEY entries in config."
     GPG_KEY_SIGN='disabled'
   else  
@@ -1913,6 +1950,8 @@ SOURCE="$SOURCE"
 BACKEND_URL="$BACKEND_URL"
 EXCLUDE="$EXCLUDE"
 
+# replace magic separators to condition command equivalents (+=and,-=or)
+cmds=$(awk -v cmds="$cmds" "BEGIN{ gsub(/\+/,\"_and_\",cmds); gsub(/\-/,\"_or_\",cmds); print cmds}")
 # convert cmds to array, lowercase for safety
 CMDS=( $(awk "BEGIN{ cmds=tolower(\"$cmds\"); gsub(/_/,\" \",cmds); print cmds }") )
 
@@ -1923,16 +1962,33 @@ do
 ## init
 # raise index in cmd array for pre/post param
 var_isset 'CMD_NO' && CMD_NO=$((++CMD_NO)) || CMD_NO=0
-# save start time
-RUN_START=$(date_fix %s)$(nsecs)
-# user info
-echo; separator "Start running command $(echo $cmd|awk '$0=toupper($0)') at $(date_from_nsecs $RUN_START)"
 
 # get prev/nextcmd vars
 nextno=$(($CMD_NO+1))
 [ "$nextno" -lt "${#CMDS[@]}" ] && CMD_NEXT=${CMDS[$nextno]} || CMD_NEXT='END'
 prevno=$(($CMD_NO-1))
 [ "$prevno" -ge 0 ] && CMD_PREV=${CMDS[$prevno]} || CMD_PREV='START'
+
+# deal with condition "commands"
+if var_isset 'CMD_SKIP' && [ $CMD_SKIP -gt 0 ]; then
+  echo -e "\n--- Skipping command $(toupper $cmd) ! ---"
+  CMD_SKIP=$(($CMD_SKIP - 1))
+  continue
+elif [ "$cmd" == 'and' ] && [ "$CMD_ERR" -ne "0" ]; then
+  CMD_SKIP=1
+  continue
+elif [ "$cmd" == 'or' ] && [ "$CMD_ERR" -eq "0" ]; then
+  CMD_SKIP=1
+  continue
+elif [ "$cmd" == 'and' ] || [ "$cmd" == 'or' ]; then
+  unset 'CMD_SKIP';
+  continue
+fi
+
+# save start time
+RUN_START=$(date_fix %s)$(nsecs)
+# user info
+echo; separator "Start running command $(toupper $cmd) at $(date_from_nsecs $RUN_START)"
 
 case "$cmd" in
   pre|post)
