@@ -38,6 +38,9 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  1.5.7 (10.06.2012)
+#  - bugfix 3531450: Cannot use space in target URL (file:///) anymore
+#
 #  1.5.6 (24.5.2012)
 #  - commands purge, purge-full have no default value anymore for security 
 #    reasons; instead max value can be given via cmd line or must be set
@@ -290,7 +293,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.6"
+ME_VERSION="1.5.7"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -927,10 +930,11 @@ function duplify { # the actual wrapper function
     if [ "$param" == "--" ] ; then
       PARAMSNOW=1
     else
+      # wrap in quotes to protect from spaces
       [ ! $PARAMSNOW ] && \
-        DUPL_CMD="$DUPL_CMD $param" \
+        DUPL_CMD="$DUPL_CMD $(qw $param)" \
       || \
-        DUPL_CMD_PARAMS="$DUPL_CMD_PARAMS $param"
+        DUPL_CMD_PARAMS="$DUPL_CMD_PARAMS $(qw $param)"
     fi
   done
 
@@ -1744,7 +1748,8 @@ update to a version greater than '0.6.10' of duplicity."
 		BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
 		;;
 esac
-# protect eval from special chars in url (e.g. open ')' in password, spaces in path)
+# protect eval from special chars in url (e.g. open ')' in password, 
+# spaces in path, quotes) happens above in duplify() via quotewrap()
 SOURCE="$SOURCE"
 BACKEND_URL="$BACKEND_URL"
 EXCLUDE="$EXCLUDE"
