@@ -28,17 +28,26 @@
 #                               --short-filenames
 #                              --old-filenames
 #  - add 'exclude_<command>' list usage eg. exclude_verify
-#  - a download/install duplicity option
-#  - bug: on key import it tries to import again and fails because 
-#    of already existing key, probably caused by legacy gpgkey 
+#  - featreq 25: a download/install duplicity option
 #  - hint on install software if a piece is missing
-#  - featreq 2995409: Prevent concurrent runs for same profile
-#  - featreq 3042778: check success of commands and react in batches 
+#  - featreq 5: Prevent concurrent runs for same profile
+#  - featreq 7: check success of commands and react in batches 
 #    e.g. backup_AND_verify_AND_purge, pre_and_bkp_and_post
 #  - import/export profile from/to .tgz function !!!
 #
 #
 #  CHANGELOG:
+#  1.6.0 (1.1.2014)
+#  - support gs backend
+#  - support dropbox backend
+#  - add gpg-agent support to gpg test routines
+#  - autoenable --use-agent if passwords were not defined in config
+#  - GPG_OPTS are now honored everywhere, keyrings or complete gpg
+#    homedir can thus be configured to be located anywhere
+#  - always import both secret and public key if avail from config profile
+#  - new explanatory comments in initial exclude file
+#  - bugfix 7: Duply only imports one key at a time 
+#
 #  1.5.11 (19.07.2013)
 #  - purge-incr command for remove-all-inc-of-but-n-full feature added
 #    patch provided by Moritz Augsburger, thanks!
@@ -113,10 +122,13 @@
 #
 #  1.5.4.1 (4.12.2010)
 #  - output awk, python, bash version now in prolog
-#  - shebang uses /usr/bin/env now for freebsd compatibility, bash not in /bin/bash 
-#  - new --disable-encryption parameter, to override profile encr settings for one run
+#  - shebang uses /usr/bin/env now for freebsd compatibility, 
+#    bash not in /bin/bash 
+#  - new --disable-encryption parameter, 
+#    to override profile encr settings for one run
 #  - added exclude-if-present setting to conf template
-#  - bug 3126972: GPG_PW only needed for signing/symmetric encryption (even though duplicity still needs it)
+#  - bug 3126972: GPG_PW only needed for signing/symmetric encryption 
+#    (even though duplicity still needs it)
 #
 #  1.5.4 (15.11.2010)
 #  - as of 1.5.3 already, new ARCH_DIR config option
@@ -312,7 +324,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.11"
+ME_VERSION="1.6.0"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -584,6 +596,7 @@ GPG_PW='${DEFAULT_GPG_PW}'
 # e.g. "--trust-model pgp|classic|direct|always" 
 #   or "--compress-algo=bzip2 --bzip2-compress-level=9"
 #   or "--personal-cipher-preferences AES256,AES192,AES..."
+#   or "--homedir ~/.duply" - keep keyring and gpg settings duply specific
 #GPG_OPTS=''
 
 # disable preliminary tests with the following setting
@@ -592,15 +605,22 @@ GPG_PW='${DEFAULT_GPG_PW}'
 # credentials & server address of the backup target (URL-Format)
 # syntax is
 #   scheme://[user:password@]host[:port]/[/]path
+# for details see duplicity manpage, section URL Format
+#   http://duplicity.nongnu.org/duplicity.1.html#sect8
 # probably one out of
 #   # for cloudfiles backend user id is CLOUDFILES_USERNAME, password is 
 #   # CLOUDFILES_APIKEY, you might need to set CLOUDFILES_AUTHURL manually
 #   cf+http://[user:password@]container_name
+#   dpbx:///some_dir
 #   file://[relative|/absolute]/local/path
 #   ftp[s]://user[:password]@other.host[:port]/some_dir
-#   hsi://user[:password]@other.host/some_dir
+#   gdocs://user[:password]@other.host/some_dir
+#   # for the google cloud storage (since duplicity 0.6.22)
+#   # user/password are GS_ACCESS_KEY_ID/GS_SECRET_ACCESS_KEY
+#   gs://bucket[/prefix] 
 #   hsi://user[:password]@other.host/some_dir
 #   imap[s]://user[:password]@host.com[/from_address_prefix]
+#   mega://user[:password]@mega.co.nz/some_dir
 #   rsync://user[:password]@host.com[:port]::[/]module/some_dir
 #   # rsync over ssh (only keyauth)
 #   rsync://user@host.com[:port]/[relative|/absolute]_path
@@ -609,6 +629,7 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #   s3+http://[user:password@]bucket_name[/prefix]
 #   # scp and sftp are aliases for the ssh backend
 #   ssh://user[:password]@other.host[:port]/[/]some_dir
+#   swift://container_name
 #   tahoe://alias/directory
 #   # for Ubuntu One set TARGET_PASS to oauth access token
 #   #   "consumer_key:consumer_secret:token:token_secret"
@@ -620,7 +641,7 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #            to be replaced by their url encoded pendants, see
 #            http://en.wikipedia.org/wiki/Url_encoding 
 #            if you define the credentials as TARGET_USER, TARGET_PASS below 
-#            duply will try to url_encode them for you if need arises
+#            duply will try to url_encode them for you if the need arises
 TARGET='${DEFAULT_TARGET}'
 # optionally the username/password can be defined as extra variables
 # setting them here _and_ in TARGET results in an error
@@ -700,6 +721,19 @@ SOURCE='${DEFAULT_SOURCE}'
 # more duplicity command line options can be added in the following way
 # don't forget to leave a separating space char at the end
 #DUPL_PARAMS="\$DUPL_PARAMS --put_your_options_here " 
+
+EOF
+
+# create initial exclude file
+    cat <<EOF >"$EXCLUDE"
+# although called exclude, this file is actually a globbing file list
+# duplicity accepts some globbing patterns, even including ones here
+# here is an example, this incl. only 'dir/bar' except it's subfolder 'foo'
+# - dir/bar/foo
+# + dir/bar
+# - **
+# for more details see duplicity manpage, section File Selection
+# http://duplicity.nongnu.org/duplicity.1.html#sect9
 
 EOF
 
@@ -983,7 +1017,7 @@ function duplify { # the actual wrapper function
   var_isset 'PREVIEW' && local RUN=echo || local RUN=eval
 $RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
  duplicity $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
- $DUPL_CMD_PARAMS ${PREVIEW:+}
+ $GPG_USEAGENT $DUPL_CMD_PARAMS ${PREVIEW:+}
 
   local ERR=$?
   return $ERR
@@ -1098,42 +1132,50 @@ function gpg_keyfile {
 
 # parameter key id
 function gpg_import {
-  local FILE KEY_ID="$1" KEY_TYPE="$2" KEY_FP="" ERR=1
-  local KEYFILES=( "$CONFDIR/gpgkey" "$(gpg_keyfile $KEY_ID)" "${KEY_TYPE:+$(gpg_keyfile $KEY_ID $KEY_TYPE)}" )
-  #[ -z $KEYFILES ] && warning "No keyfile for '$KEY_ID' found in profile\n'$CONFDIR'."
-  # Try autoimport from existing old gpgkey files and new gpgkey.XXX.asc files (since v1.4.2)
+  local i FILE FOUND=0 KEY_ID="$1" KEY_TYPE="$2" KEY_FP="" ERR=0
+  # create a list of legacy key file names and current naming scheme
+  # we always import pub and sec if they are avail in conf folder
+  local KEYFILES=( "$CONFDIR/gpgkey" "$(gpg_keyfile $KEY_ID)" \
+                   "$(gpg_keyfile $KEY_ID PUB)" "$(gpg_keyfile $KEY_ID SEC)")
+
+  # Try autoimport from existing old gpgkey files 
+  # and new gpgkey.XXX.asc files (since v1.4.2)
+  # and even newer gpgkey.XXX.[pub|sec].asc
   for (( i = 0 ; i < ${#KEYFILES[@]} ; i++ )); do
     FILE=${KEYFILES[$i]}
     if [ -f "$FILE" ]; then
-
-      CMD_MSG="Import keyfile '$FILE'"
-      run_cmd "$GPG" --batch --import "$FILE"
+      FOUND=1
+      
+      CMD_MSG="Import keyfile '$FILE' to keyring"
+      run_cmd "$GPG" $GPG_OPTS --batch --import "$FILE"
       if [ "$CMD_ERR" != "0" ]; then 
         warning "Import failed.${CMD_OUT:+\n$CMD_OUT}"
+        ERR=1
         # continue with next
-        break
+        continue
       fi
-
-      # imported at least one; return success
-      ERR=0
-
-      # set trust automagically
-      CMD_MSG="Autoset trust of key '$KEY_ID'to ultimate"
-      run_cmd echo $(gpg_fingerprint $KEY_ID):6: \| "$GPG" --import-ownertrust --batch --logger-fd 1
-      if [ "$CMD_ERR" = "0" ] && [ -z "$PREVIEW" ]; then 
-       break
-      fi
-
-      # set trust manually
-      echo -e "For $ME to work you have to set the trust level 
-with the command \"trust\" to \"ultimate\" (5) now.
-Exit the edit mode of gpg with \"quit\"."
-      CMD_MSG="Running gpg to manually edit key '$KEY_ID'"
-      run_cmd sleep 5\; "$GPG" --edit-key $KEY_ID
-
     fi
   done
-  
+
+  if [ "$FOUND" -eq 0 ]; then
+    warning "No keyfile for '$KEY_ID' found in profile\n'$CONFDIR'."
+  fi
+
+  # try to set trust automagically
+  CMD_MSG="Autoset trust of key '$KEY_ID'to ultimate"
+  run_cmd echo $(gpg_fingerprint $KEY_ID):6: \| "$GPG" $GPG_OPTS --import-ownertrust --batch --logger-fd 1
+  if [ "$CMD_ERR" = "0" ] && [ -z "$PREVIEW" ]; then 
+   # success on all levels, we're done
+   return $ERR
+  fi
+
+  # failover: user has to set trust manually
+  echo -e "For $ME to work you have to set the trust level 
+with the command \"trust\" to \"ultimate\" (5) now.
+Exit the edit mode of gpg with \"quit\"."
+  CMD_MSG="Running gpg to manually edit key '$KEY_ID'"
+  run_cmd sleep 5\; "$GPG" $GPG_OPTS --edit-key $KEY_ID
+
   return $ERR
 }
 
@@ -1141,7 +1183,7 @@ Exit the edit mode of gpg with \"quit\"."
 # see 'How to specify a user ID' on gpg manpage
 function gpg_fingerprint {
   [ ${#1} -eq 8 ] \
-    && local PRINT=$("$GPG" --fingerprint 0x"$1" 2>&1|awk -F= 'NR==2{gsub(/ /,"",$2);$2=toupper($2); if ( $2 ~ /^[A-F0-9]+$/ && length($2) == 40 ) print $2; else exit 1}') \
+    && local PRINT=$("$GPG" $GPG_OPTS --fingerprint 0x"$1" 2>&1|awk -F= 'NR==2{gsub(/ /,"",$2);$2=toupper($2); if ( $2 ~ /^[A-F0-9]+$/ && length($2) == 40 ) print $2; else exit 1}') \
     && [ -n "$PRINT" ] && echo $PRINT && return 0
   return 1
 }
@@ -1156,7 +1198,7 @@ function gpg_export_if_needed {
       if [ ! -f "$FILE" ] && eval gpg_$(tolower $KEY_TYPE)_avail $KEY_ID; then
         # exporting
         CMD_MSG="Export $KEY_TYPE key $KEY_ID"
-        run_cmd $GPG --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)"" $KEY_ID >> \"$TMPFILE\""
+        run_cmd $GPG $GPG_OPTS --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)"" $KEY_ID >> \"$TMPFILE\""
 
         if [ "$CMD_ERR" = "0" ]; then
           CMD_MSG="Write file '"$(basename "$FILE")"'"
@@ -1188,9 +1230,9 @@ function gpg_key_cache {
     return 255
   elif ! var_isset "$CACHE"; then
     if [ "$1" = "PUB" ]; then
-      RES=$("$GPG" --list-key "$2" > /dev/null 2>&1; echo -n $?)
+      RES=$("$GPG" $GPG_OPTS --list-key "$2" > /dev/null 2>&1; echo -n $?)
     elif [ "$1" = "SEC" ]; then
-      RES=$("$GPG" --list-secret-key "$2" > /dev/null 2>&1; echo -n $?)
+      RES=$("$GPG" $GPG_OPTS --list-secret-key "$2" > /dev/null 2>&1; echo -n $?)
     else
       return 255
     fi
@@ -1243,7 +1285,7 @@ function gpg_passwd {
 
 function gpg_key_decryptable {
   # decryption needs pass, might be empty, but must be set
-  var_isset 'GPG_PW' || return 1
+  #var_isset 'GPG_PW' || return 1
   local KEY_ID
   for KEY_ID in ${GPG_KEYS_ENC[@]}; do
     gpg_sec_avail $KEY_ID && return 0
@@ -1252,7 +1294,31 @@ function gpg_key_decryptable {
 }
 
 function gpg_symmetric {
-  [ -n "$GPG_PW" ] && [ -z "${GPG_KEY}${GPG_KEYS_ENC}" ]
+  [ -z "${GPG_KEY}${GPG_KEYS_ENC}" ]
+}
+
+# checks for max two params if they are set, typically GPG_PW & GPG_PW_SIGN
+function gpg_param_passwd {
+  var_isset GPG_USEAGENT && exit 1
+  
+  if ( [ -n "$1" ] && var_isset "$1" ) || ( [ -n "$2" ] && var_isset "$2" ); then
+    echo "--passphrase-fd 0"
+  fi
+}
+
+# select the earlist defined and create an "echo <value> |" string
+function gpg_pass_pipein {
+  var_isset GPG_USEAGENT && exit 1
+  
+  for var in "$@"
+  do
+    if var_isset "$var"; then
+      echo "echo $(qw $(eval echo \$$var)) |"
+      return 0
+    fi
+  done
+  
+  return 1
 }
 
 # start of script #######################################################################
@@ -1323,7 +1389,6 @@ Hint:
  Hint: Run '$ME usage' to get help."
     fi
 esac
-##fi
 
 
 # Hello world
@@ -1559,7 +1624,7 @@ for (( i = 0 ; i < ${#GPG_KEYS_ENC[@]} ; i++ )); do
   KEY_ID=${GPG_KEYS_ENC[$i]}
   # test availability, try to import, retest
   if ! gpg_pub_avail ${KEY_ID}; then
-    echo "Encryption public key '${KEY_ID}' not found. Try to import."
+    echo "Encryption public key '${KEY_ID}' not found."
     gpg_import "${KEY_ID}" PUB
     gpg_key_cache RESET ${KEY_ID}
     gpg_pub_avail ${KEY_ID} || error_gpg_key "${KEY_ID}" "Public"
@@ -1604,16 +1669,38 @@ else
     gpg_key_cache RESET ${KEY_ID}
     gpg_sec_avail ${KEY_ID} || error_gpg_key "${KEY_ID}" "Private"
   else
-    echo "Using configured key '${KEY_ID}' as signing key."
+    echo "Use configured key '${KEY_ID}' as signing key."
   fi
 fi
 
-# pw set? only if symmetric or signing on
-if ( gpg_symmetric || gpg_signing ) \
-   && ( ! var_isset 'GPG_PW' || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ] ); then
-  error_gpg "Encryption Password GPG_PW (needed for signing or symmetric encryption) 
-is not set or still default value in conf file 
-'$CONF'." "For empty password set GPG_PW='' in conf file."
+# pw set? 
+# symmetric needs one, always
+if gpg_symmetric && ( [ -z "$GPG_PW" ] || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ] ) \
+  ; then
+  error_gpg "Encryption passphrase GPG_PW (needed for symmetric encryption) 
+is empty/not set or still default value in conf file 
+'$CONF'."
+fi
+# this is a technicality, we can only pump one pass via pipe into gpg
+# but symmetric already always needs one for encryption
+if gpg_symmetric && var_isset GPG_PW && var_isset GPG_PW_SIGN &&\
+  [ -n "$GPG_PW_SIGN" ] && [ "$GPG_PW" != "$GPG_PW_SIGN" ]; then
+  error_gpg "GPG_PW _and_ GPG_PW_SIGN are defined but not identical in config
+'$CONF'.
+This is unfortunately impossible. For details see duplicity manpage, 
+section 'A Note On Symmetric Encryption And Signing'.
+
+Tip: Separate signing keys may have empty passwords e.g. GPG_PW_SIGN=''."
+fi
+# key enc can deal without, but might profit from gpg-agent
+# if GPG_PW is not set alltogether
+# if signing key is different from first (main) enc key (we can only pipe one pass into gpg)
+if ! gpg_symmetric && \
+   ( ! var_isset GPG_PW || \
+     ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC[0]}" ] ) ); then
+  echo "Autoenable use of gpg-agent. GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
+
+  GPG_USEAGENT="--use-agent"
 fi
 
 # end GPG config plausibility check2 
@@ -1665,7 +1752,7 @@ function cleanup_gpgtest {
 
 # signing enabled?
 if gpg_signing; then
-  CMD_PARAM_SIGN="--sign --default-key ${GPG_KEY_SIGN} --passphrase-fd 0"
+  CMD_PARAM_SIGN="--sign --default-key ${GPG_KEY_SIGN}"
   CMD_MSG_SIGN="Sign with ${GPG_KEY_SIGN}"
 fi
 
@@ -1677,7 +1764,7 @@ if [ ${#GPG_KEYS_ENC[@]} -gt 0 ]; then
   done
   # check encrypting
   CMD_MSG="Test - Encrypt to $(gpg_join_keyset ${GPG_KEYS_ENC[@]})${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd echo $(qw "${GPG_PW_SIGN:-$GPG_PW}") \| $GPG $CMD_PARAM_SIGN $CMD_PARAMS --batch --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
+  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) $GPG $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --batch --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
 
   if [ "$CMD_ERR" != "0" ]; then 
     KEY_NOTRUST=$(echo "$CMD_OUT"|awk '/^\[GNUPG:\] INV_RECP 10/ { print $4 }')
@@ -1690,7 +1777,7 @@ if [ ${#GPG_KEYS_ENC[@]} -gt 0 ]; then
   # check decrypting
   CMD_MSG="Test - Decrypt"
   gpg_key_decryptable || CMD_DISABLED="No matching secret key or GPG_PW not set."
-  run_cmd echo $(qw "${GPG_PW}") \| $GPG --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch $GPG_OPTS -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $(gpg_param_passwd GPG_PW) $GPG_OPTS -o "${GPG_TEST}_DEC" $GPG_USEAGENT --batch -d "${GPG_TEST}_ENC"
 
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Decryption failed.${CMD_OUT:+\n$CMD_OUT}"
@@ -1700,15 +1787,14 @@ if [ ${#GPG_KEYS_ENC[@]} -gt 0 ]; then
 else
   # check encrypting
   CMD_MSG="Test - Encryption with passphrase${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd echo $(qw "${GPG_PW}") \| $GPG $CMD_PARAM_SIGN --passphrase-fd 0 -o "${GPG_TEST}_ENC" --batch $GPG_OPTS -c "$ME_LONG"
-
+  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o "${GPG_TEST}_ENC" --batch -c "$ME_LONG"
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Encryption failed.${CMD_OUT:+\n$CMD_OUT}"
   fi
 
   # check decrypting
   CMD_MSG="Test - Decryption with passphrase"
-  run_cmd echo $(qw "${GPG_PW}") \| $GPG --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch $GPG_OPTS -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $GPG_OPTS --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch -d "${GPG_TEST}_ENC"
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Decryption failed.${CMD_OUT:+\n$CMD_OUT}"
   fi
@@ -1716,7 +1802,7 @@ fi
 
 # compare original w/ decryptginal
 CMD_MSG="Test - Compare"
-[ -r "${GPG_TEST}_DEC" ] || CMD_DISABLED="Nothing to compare."
+[ -r "${GPG_TEST}_DEC" ] || CMD_DISABLED="File not found. Nothing to compare."
 run_cmd "test \"\$(cat '$ME_LONG')\" = \"\$(cat '${GPG_TEST}_DEC')\""
 
 if [ "$CMD_ERR" = "0" ]; then 
@@ -1750,72 +1836,77 @@ var_isset 'TARGET_PASS' && TARGET_URL_PASS="$TARGET_PASS"
 
 # build target backend data depending on protocol
 case "$(tolower "${TARGET_URL_PROT%%:*}")" in
-	's3'|'s3+http')
-		BACKEND_PARAMS="AWS_ACCESS_KEY_ID='${TARGET_URL_USER}' AWS_SECRET_ACCESS_KEY='${TARGET_URL_PASS}'"
-		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-		;;
-	'cf+http')
-		# respect possibly set cloudfile env vars
-		var_isset 'CLOUDFILES_USERNAME' && TARGET_URL_USER="$CLOUDFILES_USERNAME"
-		var_isset 'CLOUDFILES_APIKEY' && TARGET_URL_PASS="$CLOUDFILES_APIKEY"
-		# add them to duplicity params
-		var_isset 'TARGET_URL_USER' && \
-			BACKEND_PARAMS="CLOUDFILES_USERNAME=$(qw "${TARGET_URL_USER}")"
-		var_isset 'TARGET_URL_PASS' && \
-			BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_APIKEY=$(qw "${TARGET_URL_PASS}")"
-		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-		# info on missing AUTH_URL
-		if ! var_isset 'CLOUDFILES_AUTHURL'; then
-			echo -e "INFO: No CLOUDFILES_AUTHURL defined (in conf).\n      Will use default from python-cloudfiles (probably rackspace)."
-		else
-			BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_AUTHURL=$(qw "${CLOUDFILES_AUTHURL}")"
-		fi
-		;;
-	'file'|'tahoe')
-		BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
-		;;
-	'rsync')
-		# everything in url (this backend does not support pass in env var)
-		# this is obsolete from version 0.6.10 (buggy), hopefully in 0.6.11
-		# print warning older version is detected
-		var_isset 'TARGET_URL_USER' && BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")"
-		if duplicity_version_lt 610; then
-			warning "\
+  's3'|'s3+http')
+    BACKEND_PARAMS="AWS_ACCESS_KEY_ID='${TARGET_URL_USER}' AWS_SECRET_ACCESS_KEY='${TARGET_URL_PASS}'"
+    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+    ;;
+  'gs')
+    BACKEND_PARAMS="GS_ACCESS_KEY_ID='${TARGET_URL_USER}' GS_SECRET_ACCESS_KEY='${TARGET_URL_PASS}'"
+    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+    ;;
+  'cf+http')
+    # respect potentially set cloudfile env vars
+    var_isset 'CLOUDFILES_USERNAME' && TARGET_URL_USER="$CLOUDFILES_USERNAME"
+    var_isset 'CLOUDFILES_APIKEY' && TARGET_URL_PASS="$CLOUDFILES_APIKEY"
+    # add them to duplicity params
+    var_isset 'TARGET_URL_USER' && \
+      BACKEND_PARAMS="CLOUDFILES_USERNAME=$(qw "${TARGET_URL_USER}")"
+    var_isset 'TARGET_URL_PASS' && \
+      BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_APIKEY=$(qw "${TARGET_URL_PASS}")"
+    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+    # info on missing AUTH_URL
+    if ! var_isset 'CLOUDFILES_AUTHURL'; then
+      echo -e "INFO: No CLOUDFILES_AUTHURL defined (in conf).\n      Will use default from python-cloudfiles (probably rackspace)."
+    else
+      BACKEND_PARAMS="$BACKEND_PARAMS CLOUDFILES_AUTHURL=$(qw "${CLOUDFILES_AUTHURL}")"
+    fi
+    ;;
+  'file'|'tahoe'|'dpbx'|'swift')
+    BACKEND_URL="${TARGET_URL_PROT}${TARGET_URL_HOSTPATH}"
+    ;;
+  'rsync')
+    # everything in url (this backend does not support pass in env var)
+    # this is obsolete from version 0.6.10 (buggy), hopefully fixed in 0.6.11
+    # print warning older version is detected
+    var_isset 'TARGET_URL_USER' && BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")"
+    if duplicity_version_lt 610; then
+      warning "\
 Duplicity version '$DUPL_VERSION' does not support providing the password as 
 env var for rsync backend. For security reasons you should consider to 
 update to a version greater than '0.6.10' of duplicity."
-			var_isset 'TARGET_URL_PASS' && BACKEND_CREDS="${BACKEND_CREDS}:$(url_encode "${TARGET_URL_PASS}")"
-		else
-			var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-		fi
-		var_isset 'BACKEND_CREDS' && BACKEND_CREDS="${BACKEND_CREDS}@"
-		BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
-		;;
-	*)
-		# all protocols with username in url, only username is in url, 
-		# pass is env var for secúrity, url_encode username to protect special chars
-		var_isset 'TARGET_URL_USER' && 
-			BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")@"
-		# sortout backends way to handle password
-		case "$(tolower "${TARGET_URL_PROT%%:*}")" in
-			'imap'|'imaps')
-				var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-			;;
-			'ssh'|'sftp'|'scp')
-				# ssh backend wants to be told that theres a pass to use
-				var_isset 'TARGET_URL_PASS' && \
-					DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
-					BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-			;;
-			*)
-				# rest uses FTP_PASS var
-				var_isset 'TARGET_URL_PASS' && \
-					BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-			;;
-		esac
-		BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
-		;;
+      var_isset 'TARGET_URL_PASS' && BACKEND_CREDS="${BACKEND_CREDS}:$(url_encode "${TARGET_URL_PASS}")"
+    else
+      var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+    fi
+    var_isset 'BACKEND_CREDS' && BACKEND_CREDS="${BACKEND_CREDS}@"
+    BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
+    ;;
+  *)
+    # for all other protocols we put username in url and pass into env var 
+    # for secúrity reasons, we url_encode username to protect special chars
+    var_isset 'TARGET_URL_USER' && 
+      BACKEND_CREDS="$(url_encode "${TARGET_URL_USER}")@"
+    # sortout backends with special ways to handle password
+    case "$(tolower "${TARGET_URL_PROT%%:*}")" in
+      'imap'|'imaps')
+        var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+      ;;
+      'ssh'|'sftp'|'scp')
+        # ssh backend wants to be told that theres a pass to use
+        var_isset 'TARGET_URL_PASS' && \
+          DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
+          BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+      ;;
+      *)
+        # rest uses FTP_PASS var
+        var_isset 'TARGET_URL_PASS' && \
+          BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+      ;;
+    esac
+    BACKEND_URL="${TARGET_URL_PROT}${BACKEND_CREDS}${TARGET_URL_HOSTPATH}"
+    ;;
 esac
+
 # protect eval from special chars in url (e.g. open ')' in password, 
 # spaces in path, quotes) happens above in duplify() via quotewrap()
 SOURCE="$SOURCE"
