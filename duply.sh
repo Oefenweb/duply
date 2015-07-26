@@ -1760,7 +1760,7 @@ if ! gpg_symmetric && \
    ( ! var_isset GPG_PW || \
      ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC[0]}" ] ) ); then
 
-    GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
+  GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
   if [ "$GPG_AGENT_ERR" -eq 1 ]; then
     echo "Cannot use gpg-agent. GPG_AGENT_INFO not set."
   elif [ "$GPG_AGENT_ERR" -eq 2 ]; then
