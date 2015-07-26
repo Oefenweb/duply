@@ -34,6 +34,11 @@
 #
 #
 #  CHANGELOG:
+#  1.8.0 (13.7.2014)
+#  - add command verifyPath to expose 'verify --file-to-restore' action
+#  - add time parameter support to verify command
+#  - add section time formats to usage output 
+#
 #  1.7.4 (24.6.2014)
 #  - remove ubuntu one support, service is discontinued
 #  - featreq 31: add authenticated swift (contributed by Justus Seifert)
@@ -349,7 +354,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.7.4"
+ME_VERSION="1.8.0"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -512,7 +517,11 @@ COMMANDS:
   list [<age>]  
              list all files in backup (as it was at <age>, default: now)
   status     prints backup sets and chains currently in repository
-  verify     list files changed since latest backup
+  verify [<age>] [--compare-data]  
+             list files changed, since age if given
+  verifyPath <rel_path_in_bkp> <local_path> [<age>] [--compare-data]  
+             list changes of a file or folder path in backup compared to a
+             local path, since age if given
   restore <target_path> [<age>]  
              restore the complete backup to <target_path> [as it was at <age>]
   fetch <src_path> <target_path> [<age>]  
@@ -545,6 +554,14 @@ OPTIONS:
   --preview  do nothing but print out generated duplicity command lines
   --disable-encryption  
              disable encryption, overrides profile settings
+
+TIME FORMATS:
+  For all time related parameters like age, max_age etc.
+  Refer to the duplicity manpage for all available formats. Here some examples:
+    2002-01-25T07:00:00+02:00 (full date time format string)
+    2002/3/5 (date string YYYY/MM/DD)
+    12D (interval, 12 days ago)
+    1h78m (interval, 1 hour 78 minutes ago)
 
 PRE/POST SCRIPTS:
   All internal duply variables will be readable in the scripts.
@@ -2067,13 +2084,25 @@ case "$(tolower $cmd)" in
           "$SOURCE" "$BACKEND_URL"
     ;;
   'verify')
-    duplify verify -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+    TIME="${ftpl_pars[0]:+"-t ${ftpl_pars[0]}"}"
+    duplify verify -- $TIME "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
           "$BACKEND_URL" "$SOURCE"
+    ;;
+  'verifypath')
+    TIME="${ftpl_pars[2]:+"-t ${ftpl_pars[2]}"}"
+    IN_PATH="${ftpl_pars[0]}"; OUT_PATH="${ftpl_pars[1]}"; 
+    ( [ -z "$IN_PATH" ] || [ -z "$OUT_PATH" ] ) && error "  Missing parameter <rel_bkp_path> or <local_path> for verifyPath.
+  
+  Hint: 
+    Syntax is -> $ME <profile> verifyPath <rel_bkp_path> <local_path> [<age>]"
+
+    duplify verify -- $TIME "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
+          --file-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
     ;;
   'list')
     # time param exists since 0.5.10+
-    TIME="${ftpl_pars[0]:-now}"
-    duplify list-current-files -- -t "$TIME" "${dupl_opts[@]}" "$BACKEND_URL"
+    TIME="${ftpl_pars[0]:+"-t ${ftpl_pars[0]}"}"
+    duplify list-current-files -- $TIME "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
   'cleanup')
     duplify cleanup -- "${dupl_opts[@]}" "$BACKEND_URL"
