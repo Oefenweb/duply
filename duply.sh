@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                           #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.   #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany           #
-#  (c) 2008-2012 Edgar Soldin (changes since version 1.3)                     #
+#  (c) 2008-2014 Edgar Soldin (changes since version 1.3)                     #
 ###############################################################################
 #  LICENSE:                                                                   #
 #  This program is licensed under GPLv2.                                      #
@@ -34,6 +34,12 @@
 #
 #
 #  CHANGELOG:
+#  1.7.2 (1.4.2014 "April,April")
+#  - bugfix: debian Bug#743190 "duply no longer allows restoration without 
+#     gpg passphrase in conf file"
+#     GPG_AGENT_INFO env var is now needed to trigger --use-agent
+#  - bugfix: gpg keyenc test routines didn't work if GPG_PW was not set
+#
 #  1.7.1 (30.3.2014)
 #  - bugfix: purge-* commands renamed to purgeFull, purgeIncr due to 
 #     incompatibility with new minus batch separator 
@@ -336,7 +342,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.7.1"
+ME_VERSION="1.7.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -1361,6 +1367,20 @@ function gpg_pass_pipein {
   return 1
 }
 
+# checks if gpg-agent is available, returns error code
+# 0 on success
+# 1 if GPG_AGENT_INFO is not set
+# 2 if GPG_AGENT_INFO is stale
+function gpg_agent_avail {
+  local ERR=1
+  if var_isset GPG_AGENT_INFO; then
+    ps -p $(echo $GPG_AGENT_INFO|awk -F: '{print $2}') > /dev/null 2>&1  &&\
+    ERR=0 || ERR=2
+  fi
+  
+  return $ERR
+}
+
 # start of script #######################################################################
 
 # confidentiality first, all we create is only readable by us
@@ -1739,9 +1759,16 @@ fi
 if ! gpg_symmetric && \
    ( ! var_isset GPG_PW || \
      ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC[0]}" ] ) ); then
-  echo "Autoenable use of gpg-agent. GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
 
-  GPG_USEAGENT="--use-agent"
+    GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
+  if [ "$GPG_AGENT_ERR" -eq 1 ]; then
+    echo "Cannot use gpg-agent. GPG_AGENT_INFO not set."
+  elif [ "$GPG_AGENT_ERR" -eq 2 ]; then
+    echo "Cannot use gpg-agent! GPG_AGENT_INFO contains stale pid."
+  else
+    echo "Autoenable use of gpg-agent. GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
+    GPG_USEAGENT="--use-agent"
+  fi
 fi
 
 # end GPG config plausibility check2 
@@ -1805,7 +1832,7 @@ if [ ${#GPG_KEYS_ENC[@]} -gt 0 ]; then
   done
   # check encrypting
   CMD_MSG="Test - Encrypt to $(gpg_join_keyset ${GPG_KEYS_ENC[@]})${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) $GPG $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --batch --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
+  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) $GPG $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
 
   if [ "$CMD_ERR" != "0" ]; then 
     KEY_NOTRUST=$(echo "$CMD_OUT"|awk '/^\[GNUPG:\] INV_RECP 10/ { print $4 }')
@@ -1818,7 +1845,7 @@ if [ ${#GPG_KEYS_ENC[@]} -gt 0 ]; then
   # check decrypting
   CMD_MSG="Test - Decrypt"
   gpg_key_decryptable || CMD_DISABLED="No matching secret key or GPG_PW not set."
-  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $(gpg_param_passwd GPG_PW) $GPG_OPTS -o "${GPG_TEST}_DEC" $GPG_USEAGENT --batch -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) "$GPG" $(gpg_param_passwd GPG_PW) $GPG_OPTS -o "${GPG_TEST}_DEC" $GPG_USEAGENT -d "${GPG_TEST}_ENC"
 
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Decryption failed.${CMD_OUT:+\n$CMD_OUT}"
