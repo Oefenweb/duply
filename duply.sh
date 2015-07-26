@@ -34,6 +34,10 @@
 #
 #
 #  CHANGELOG:
+#  1.7.1 (30.3.2014)
+#  - bugfix: purge-* commands renamed to purgeFull, purgeIncr due to 
+#     incompatibility with new minus batch separator 
+#
 #  1.7.0 (20.3.2014)
 #  - disabled gpg key id plausibility check, too many valid possibilities
 #  - featreq 7 "Halt if precondition fails":
@@ -332,7 +336,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.7.0"
+ME_VERSION="1.7.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -503,12 +507,12 @@ COMMANDS:
   purge [<max_age>] [--force]  
              list outdated backup files (older than \$MAX_AGE)
               [use --force to actually delete these files]
-  purge-full [<max_full_backups>] [--force]  
+  purgeFull [<max_full_backups>] [--force]  
              list outdated backup files (\$MAX_FULL_BACKUPS being the number of
              full backups and associated incrementals to keep, counting in 
              reverse chronological order)
               [use --force to actually delete these files]
-  purge-incr [<max_fulls_with_incrs>] [--force]  
+  purgeIncr [<max_fulls_with_incrs>] [--force]  
              list outdated incremental backups (\$MAX_FULLS_WITH_INCRS being 
              the number of full backups which associated incrementals will be
              kept, counting in reverse chronological order) 
@@ -1990,8 +1994,8 @@ RUN_START=$(date_fix %s)$(nsecs)
 # user info
 echo; separator "Start running command $(toupper $cmd) at $(date_from_nsecs $RUN_START)"
 
-case "$cmd" in
-  pre|post)
+case "$(tolower $cmd)" in
+  'pre'|'post')
     if [ "$cmd" == 'pre' ]; then
       script=$PRE
     else
@@ -2000,52 +2004,52 @@ case "$cmd" in
     # script execution in a subshell, protect us from failures/var overwrites
     ( run_script "$script" )
     ;;
-  bkp)
+  'bkp')
     duplify -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
-  incr)
+  'incr')
     duplify incr -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
-  full)
+  'full')
     duplify full -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
-  verify)
+  'verify')
     duplify verify -- "${dupl_opts[@]}" --exclude-globbing-filelist "$EXCLUDE" \
           "$BACKEND_URL" "$SOURCE"
     ;;
-  list)
+  'list')
     # time param exists since 0.5.10+
     TIME="${ftpl_pars[0]:-now}"
     duplify list-current-files -- -t "$TIME" "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
-  cleanup)
+  'cleanup')
     duplify cleanup -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
-  purge)
+  'purge')
     MAX_AGE=${ftpl_pars[0]:-$MAX_AGE}
     [ -z "$MAX_AGE" ] && error "  Missing parameter <max_age>. Can be set in profile or as command line parameter."
     
     duplify remove-older-than "${MAX_AGE}" \
           -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
-  purge-full)
+  'purgefull')
     MAX_FULL_BACKUPS=${ftpl_pars[0]:-$MAX_FULL_BACKUPS}
     [ -z "$MAX_FULL_BACKUPS" ] && error "  Missing parameter <max_full_backups>. Can be set in profile or as command line parameter."
   
     duplify remove-all-but-n-full "${MAX_FULL_BACKUPS}" \
           -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
-  purge-incr)
+  'purgeincr')
     MAX_FULLS_WITH_INCRS=${ftpl_pars[0]:-$MAX_FULLS_WITH_INCRS}
     [ -z "$MAX_FULLS_WITH_INCRS" ] && error "  Missing parameter <max_fulls_with_incrs>. Can be set in profile or as command line parameter."
   
     duplify remove-all-inc-of-but-n-full "${MAX_FULLS_WITH_INCRS}" \
           -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;
-  restore)
+  'restore')
     OUT_PATH="${ftpl_pars[0]}"; TIME="${ftpl_pars[1]:-now}";
     [ -z "$OUT_PATH" ] && error "  Missing parameter target_path for restore.
   
@@ -2054,7 +2058,7 @@ case "$cmd" in
     
     duplify  -- -t "$TIME" "${dupl_opts[@]}" "$BACKEND_URL" "$OUT_PATH"
     ;;
-  fetch)
+  'fetch')
     IN_PATH="${ftpl_pars[0]}"; OUT_PATH="${ftpl_pars[1]}"; 
     TIME="${ftpl_pars[2]:-now}";
     ( [ -z "$IN_PATH" ] || [ -z "$OUT_PATH" ] ) && error "  Missing parameter <src_path> or <target_path> for fetch.
@@ -2066,7 +2070,7 @@ case "$cmd" in
     duplify -- --restore-time "$TIME" "${dupl_opts[@]}" \
               --file-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
     ;;
-  status)
+  'status')
     duplify collection-status -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;    
   *)
