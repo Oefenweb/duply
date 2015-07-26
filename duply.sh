@@ -38,7 +38,7 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
-#  1.5.8 ()
+#  1.5.8 (26.10.2012)
 #  - bugfix 3575487: implement proper cloud files support
 #
 #  1.5.7 (10.06.2012)
