@@ -34,6 +34,9 @@
 #
 #
 #  CHANGELOG:
+#  1.7.3 (3.4.2014)
+#  - bugfix: test routines, gpg2 asked for passphrase although GPG_PW was set
+#
 #  1.7.2 (1.4.2014 "April,April")
 #  - bugfix: debian Bug#743190 "duply no longer allows restoration without 
 #     gpg passphrase in conf file"
@@ -342,7 +345,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.7.2"
+ME_VERSION="1.7.3"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -1348,7 +1351,7 @@ function gpg_param_passwd {
   var_isset GPG_USEAGENT && exit 1
   
   if ( [ -n "$1" ] && var_isset "$1" ) || ( [ -n "$2" ] && var_isset "$2" ); then
-    echo "--passphrase-fd 0"
+    echo "--passphrase-fd 0 --batch"
   fi
 }
 
