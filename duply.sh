@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                           #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.   #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany           #
-#  (c) 2008-2014 Edgar Soldin (changes since version 1.3)                     #
+#  (c) 2008-2015 Edgar Soldin (changes since version 1.3)                     #
 ###############################################################################
 #  LICENSE:                                                                   #
 #  This program is licensed under GPLv2.                                      #
@@ -40,6 +40,7 @@
 #  - bugfix 82: GREP_OPTIONS=--color=always disrupted time calculation
 #  - added GPG conf var (see conf template for details)
 #  - added grep version output as it is an integral needed binary
+#  - added PYTHONPATH printout in version output
 #
 #  1.9.1 (13.10.2014)
 #  - export CMD_ERR now for scripts to detect if CMD_PREV failed/succeeded
@@ -444,14 +445,17 @@ END
 }
 
 function using_info {
-  duplicity_version_get
+  lookup duplicity && duplicity_version_get
+  local NOTFOUND="[not found]"
   # freebsd awk (--version only), debian mawk (-W version only), deliver '' so awk does not wait for input
-  local AWK_VERSION=$((awk --version '' 2>/dev/null || awk -W version '' 2>/dev/null) | awk '/.+/{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);print $0;exit}')
-  local PYTHON_VERSION=$(python -V 2>&1| awk '{print tolower($0);exit}')
-  local GPG_INFO=$(gpg --version 2>&1| awk 'NR==1{v=$1" "$3};/^Home:/{print v" ("$0")"}' || echo gpg MISSING?)
+  local AWK_VERSION=$( lookup awk && (awk --version '' 2>/dev/null || awk -W version '' 2>/dev/null) |\
+                         awk '/.+/{sub(/^[Aa][Ww][Kk][ \t]*/,"",$0);print $0;exit}' \
+                       || echo "[MISSING]" )
+  local PYTHON_VERSION=$(lookup python && python -V 2>&1| awk '{print tolower($0);exit}' || echo "python $NOTFOUND" )
+  local GPG_INFO=$(gpg_avail && gpg --version 2>&1| awk 'NR==1{v=$1" "$3};/^Home:/{print v" ("$0")"}' || echo "gpg $NOTFOUND")
   local BASH_VERSION=$(bash --version | awk 'NR==1{IGNORECASE=1;sub(/GNU bash, version[ ]+/,"",$0);print $0}')
-  local GREP_VERSION=$(grep --version | awk 'NR==1{IGNORECASE=1;sub(/grep[ ]+/,"",$0);print $0}')
-  echo -e "Using installed duplicity version ${DUPL_VERSION:-(not found)}\
+  local GREP_VERSION=$(lookup grep && grep --version | awk 'NR==1{IGNORECASE=1;sub(/grep[ ]+/,"",$0);print $0}' || echo "$NOTFOUND")
+  echo -e "Using installed duplicity version ${DUPL_VERSION:-$NOTFOUND}\
 ${PYTHON_VERSION+, $PYTHON_VERSION${PYTHONPATH:+ 'PYTHONPATH=$PYTHONPATH'}}\
 ${GPG_INFO:+, $GPG_INFO}${AWK_VERSION:+, awk '${AWK_VERSION}'}${GREP_VERSION:+, grep '${GREP_VERSION}'}\
 ${BASH_VERSION:+, bash '${BASH_VERSION}'}."
@@ -1501,20 +1505,6 @@ umask 077
 # check if ftplicity is there & executable
 [ -n "$ME_LONG" ] && [ -x "$ME_LONG" ] || error "$ME missing. Executable & available in path? ($ME_LONG)"
 
-# check system environment
-
-# is duplicity avail
-lookup duplicity || error_path "duplicity missing. installed und available in path?"
-# init, exec duplicity version check info
-duplicity_version_get
-duplicity_version_check
-
-# check for certain important helper programs
-for f in awk grep; do
-  lookup "$f" || \
-    error_path "$f missing. installed und available in path?"
-done
-
 if [ ${#@} -eq 1 ]; then
   cmd="${1}"
 else
@@ -1584,6 +1574,20 @@ esac
 
 # Hello world
 echo "Start $ME v$ME_VERSION, time is $(date_fix '%F %T')."
+
+# check system environment
+
+# is duplicity avail
+lookup duplicity || error_path "duplicity missing. installed und available in path?"
+# init, exec duplicity version check info
+duplicity_version_get
+duplicity_version_check
+
+# check for certain important helper programs
+for f in awk grep; do
+  lookup "$f" || \
+    error_path "$f missing. installed und available in path?"
+done
 
 ### read configuration
 set_config
