@@ -38,6 +38,10 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  1.5.9 (22.11.2012)
+#  - bugfix 3588926: filter --exclude* params for restore/fetch ate too much
+#  - restore/fetch now also ignores --include* or --exclude='foobar' 
+#
 #  1.5.8 (26.10.2012)
 #  - bugfix 3575487: implement proper cloud files support
 #
@@ -296,7 +300,7 @@
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.5.8"
+ME_VERSION="1.5.9"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -918,9 +922,9 @@ DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR' \
 function duplicity_params_conf {
 	# reuse cmd var from main loop
 	## in/exclude parameters are currently not supported on restores
-	if  [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ]; then
+	if [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ]; then
 		# filter exclude params from fetch/restore
-		echo "$DUPL_PARAMS" | awk '{sub(/(--exclude[-a-z]+)([[:space:]]+[[:graph:]]+)?/,"");print}'
+		echo "$DUPL_PARAMS" | awk '{gsub(/--(ex|in)clude[a-z-]*(([[:space:]]+|=)[^-][[:graph:]]+)?/,"");print}'
 		return
 	fi
 	
@@ -1037,11 +1041,11 @@ function url_decode {
 }
 
 function toupper {
-  echo $(echo $1|awk '$0=toupper($0)')
+  echo "$@"|awk '$0=toupper($0)'
 }
 
 function tolower {
-  echo $(echo $1|awk '$0=tolower($0)')
+  echo "$@"|awk '$0=tolower($0)'
 }
 
 function gpg_disabled {
