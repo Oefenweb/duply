@@ -34,7 +34,7 @@
 #
 #
 #  CHANGELOG:
-#  1.10dev ()
+#  1.10 (31.7.2015)
 #  - featreq 36: busybox issues - fix awk, grep version detection,
 #    fix grep failure because --color=never switch is unsupported
 #    (thx Thomas Harning Jr. for reporting and helping to debug/fix it)
@@ -44,10 +44,10 @@
 #  - featreq 31 " Support for duplicity Azure backend " - ignored a 
 #    contributed patch by Scott McKenzie and instead opted for removing almost
 #    all code that deals with special env vars required by backends.
-#    modifying and adding this results in too much overhead so i dropped this
+#    adding and modifying these results in too much overhead so i dropped this
 #    feature. the future alternative for users is to consult the duplicity 
 #    manpage and add the needed export definitions to the conf file.
-#    added a commented example to the template conf at the appropriate place.
+#    appended a commented example to the template conf below the auth section.
 #
 #  1.9.2 (21.6.2015)
 #  - bugfix: exporting keys with gpg2.1 works now (thx Philip Jocks)
@@ -411,7 +411,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.9.3dev"
+ME_VERSION="1.10"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -1754,32 +1754,6 @@ elif var_isset 'TARGET_PASS' && var_isset 'TARGET_URL_PASS' && \
  are configured with different values. There can be only one.
  
  Hint: Remove conflicting setting."
-fi
-
-# check if authentication information sufficient
-if ( ( ! var_isset 'TARGET_USER' && ! var_isset 'TARGET_URL_USER' ) && \
-       ( ! var_isset 'TARGET_PASS' && ! var_isset 'TARGET_URL_PASS' ) ); then
-  # ok here some exceptions:
-  #   protocols that do not need passwords
-  #   s3[+http] only needs password for write operations
-  if [ -n "$( tolower "${TARGET_URL_PROT}" | grep -e '^\(dpbx\|file\|tahoe\|ssh\|scp\|sftp\|swift\)://$' )" ]; then
-    : # all is well file/tahoe do not need passwords, ssh might use key auth
-  elif [ -n "$(tolower "${TARGET_URL_PROT}" | grep -e '^s3\(\+http\)\?://$')" ] && \
-     [ -z "$(echo ${cmds} | grep -e '\(bkp\|incr\|full\|purge\|cleanup\)')" ]; then
-    : # still fine, it's possible to read only access configured buckets anonymously
-  else
-    error " Backup target credentials needed but not set in conf file 
- '$CONF'.
- Setting TARGET_USER or TARGET_PASS or the corresponding values in TARGET url 
- are missing. Some protocols only might need it for write access to the backup 
- repository (commands: bkp,backup,full,incr,purge) but not for read only access
- (e.g. verify,list,restore,fetch). 
- 
- Hints:
-   Add the credentials (user,password) to the conf file.
-   To force an empty password set TARGET_PASS='' or TARGET='prot://user:@host..'.
-"
-  fi
 fi
 
 # GPG config plausibility check1 (disabled check) #############################
