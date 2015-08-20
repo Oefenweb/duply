@@ -34,6 +34,10 @@
 #
 #
 #  CHANGELOG:
+#  1.10.1 (19.8.2015)
+#  - bugfix 86: Duply+Swift outputs warning
+#  - bugfix 87: Swift fails without BACKEND_URL
+#
 #  1.10 (31.7.2015)
 #  - featreq 36: busybox issues - fix awk, grep version detection,
 #    fix grep failure because --color=never switch is unsupported
@@ -411,7 +415,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.10"
+ME_VERSION="1.10.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -2015,7 +2019,7 @@ var_isset 'TARGET_URL_PASS' && TARGET_URL_PASS="$(url_decode "$TARGET_URL_PASS")
 var_isset 'TARGET_USER' && TARGET_URL_USER="$TARGET_USER"
 var_isset 'TARGET_PASS' && TARGET_URL_PASS="$TARGET_PASS"
 
-# build target backend data depending on protocol
+# issue some warnings
 case "$(tolower "${TARGET_URL_PROT%%:*}")" in
   'cf+http')
     # info on missing AUTH_URL
@@ -2026,7 +2030,7 @@ Will use default which is probably rackspace."
     ;;
    'swift')
     # info on possibly missing AUTH_URL
-       var_isset 'SWIFT_AUTHURL' &&\
+       var_isset 'SWIFT_AUTHURL' ||\
        warning "\
 Swift will probably fail because the conf var SWIFT_AUTHURL was not exported!"
     ;;
@@ -2040,38 +2044,38 @@ Duplicity version '$DUPL_VERSION' does not support providing the password as
 env var for rsync backend. For security reasons you should consider to 
 update to a version greater than '0.6.10' of duplicity."
     ;;
-  *)
-    # for all other protocols we put username in url and pass into env var 
-    # for secúrity reasons, we url_encode username to protect special chars
+esac
 
-    # sortout backends with special ways to handle password
+
+# for all protocols we put username in url and pass into env var 
+# for secúrity reasons, we url_encode username to protect special chars
+# first sortout backends with special ways to handle password
+case "$(tolower "${TARGET_URL_PROT%%:*}")" in
+  'imap'|'imaps')
+    var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
+    ;;
+  *)
+    # add needed param for ssh backend
     case "$(tolower "${TARGET_URL_PROT%%:*}")" in
-      'imap'|'imaps')
-        var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-      ;;
-      *)
-        # add needed param for ssh backend
-        case "$(tolower "${TARGET_URL_PROT%%:*}")" in
-          'ssh'|'sftp'|'scp')
-            # ssh backend wants to be told that there is a pass to use
-            var_isset 'TARGET_URL_PASS' && \
-              DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
-              BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-            ;;
-        esac
-        # rest uses FTP_PASS var
+      'ssh'|'sftp'|'scp')
+        # ssh backend wants to be told that there is a pass to use
         var_isset 'TARGET_URL_PASS' && \
+          DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
           BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-      ;;
+        ;;
     esac
-    # insert url encoded username into target url if needed
-    if var_isset 'TARGET_URL_USER'; then
-      BACKEND_URL="${TARGET_URL_PROT}$(url_encode "${TARGET_URL_USER}")@${TARGET_URL_HOSTPATH}"
-    else
-      BACKEND_URL="$TARGET"
-    fi
+    # rest uses FTP_PASS var
+    var_isset 'TARGET_URL_PASS' && \
+      BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
     ;;
 esac
+# insert url encoded username into target url if needed
+if var_isset 'TARGET_URL_USER'; then
+  BACKEND_URL="${TARGET_URL_PROT}$(url_encode "${TARGET_URL_USER}")@${TARGET_URL_HOSTPATH}"
+else
+  BACKEND_URL="$TARGET"
+fi
+
 
 # protect eval from special chars in url (e.g. open ')' in password, 
 # spaces in path, quotes) happens above in duplify() via quotewrap()
