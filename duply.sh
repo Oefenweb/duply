@@ -34,12 +34,19 @@
 #
 #
 #  CHANGELOG:
+#  1.11 ()
+#  - remove obsolete --ssh-askpass routine
+#  - add PYTHON conf var to allow global override of used python interpreter
+#  - enforced usage of "python2" in PATH as default interpreter globally
+#  - featreq 36: support gpg-connect-agent as a means to detect if an agent is 
+#    running (conceptually contributed by Thomas Harning Jr.)
+#
 #  1.10.1 (19.8.2015)
 #  - bugfix 86: Duply+Swift outputs warning
 #  - bugfix 87: Swift fails without BACKEND_URL
 #
 #  1.10 (31.7.2015)
-#  - featreq 36: busybox issues - fix awk, grep version detection,
+#  - featreq 37: busybox issues - fix awk, grep version detection,
 #    fix grep failure because --color=never switch is unsupported
 #    (thx Thomas Harning Jr. for reporting and helping to debug/fix it)
 #  - bugfix 81: --exclude-globbing-filelist is deprecated since 0.7.03
@@ -404,9 +411,16 @@ function dirname {
   echo ${1%/*}
 }
 
-# a lookup function for executables working with names or file paths
+# implement basic which in plain bash
+function which {
+  type -p "$@"
+}
+
+# check availability of executables via file name or file paths
 function lookup {
   local bin="$1"
+  # look for file names in path via bash hash OR 
+  # look for executables at given relative/absolute location
   ( [ "${bin##*/}" == "$bin" ] && hash "$bin" 2>/dev/null ) || [ -x "$bin" ]
 }
 
@@ -415,7 +429,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.10.1"
+ME_VERSION="1.11dev"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -426,6 +440,7 @@ DEFAULT_TARGET_PASS='_backend_password_'
 DEFAULT_GPG='gpg'
 DEFAULT_GPG_KEY='_KEY_ID_'
 DEFAULT_GPG_PW='_GPG_PASSWORD_'
+DEFAULT_PYTHON='python2'
 
 # function definitions ##########################
 
@@ -486,13 +501,18 @@ $(version_info)
 END
 }
 
+function python_binary {
+  echo "${PYTHON-$DEFAULT_PYTHON}"
+}
+
 function using_info {
   lookup duplicity && duplicity_version_get
   local NOTFOUND="MISSING"
   # freebsd awk (--version only), debian mawk (-W version only), deliver '' so awk does not wait for input
   local AWK_VERSION=$( lookup awk && (awk --version 2>/dev/null || awk -W version 2>&1) | awk 'NR<=2&&tolower($0)~/(busybox|awk)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
   local GREP_VERSION=$( lookup grep && grep --version 2>&1 | awk 'NR<=2&&tolower($0)~/(busybox|grep.*[0-9]+\.[0-9]+)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
-  local PYTHON_VERSION=$(lookup python && python -V 2>&1| awk '{print tolower($0);exit}' || echo "python $NOTFOUND" )
+  local PYTHON_RUNNER=$(python_binary)
+  local PYTHON_VERSION=$(lookup "$PYTHON_RUNNER" && "$PYTHON_RUNNER" -V 2>&1| awk '{print tolower($0);exit}' || echo "'$PYTHON_RUNNER' $NOTFOUND" )
   local GPG_INFO=$(gpg_avail && gpg --version 2>&1| awk 'NR==1{v=$1" "$3};/^Home:/{print v" ("$0")"}' || echo "gpg $NOTFOUND")
   local BASH_VERSION=$(bash --version | awk 'NR==1{IGNORECASE=1;sub(/GNU bash, version[ ]+/,"",$0);print $0}')
   echo -e "Using installed duplicity version ${DUPL_VERSION:-$NOTFOUND}\
@@ -777,6 +797,10 @@ SOURCE='${DEFAULT_SOURCE}'
 #  shape bandwidth use via trickle
 #  "trickle -s -u 640 -d 5120" # 5Mb up, 40Mb down"
 #DUPL_PRECMD=""
+
+# override the used python interpreter, defaults to "python2"
+#   e.g. "python" or "/usr/bin/python2.7"
+#PYTHON="python2"
 
 # exclude folders containing exclusion file (since duplicity 0.5.14)
 # Uncomment the following two lines to enable this setting.
@@ -1147,9 +1171,15 @@ function duplify { # the actual wrapper function
   # init global duplicity parameters same for all tasks
   duplicity_params_global
 
-  var_isset 'PREVIEW' && local RUN=echo || local RUN=eval
+  local RUN=eval BIN=duplicity DUPL_BIN
+  # run in cmd line preview mode if requested
+  var_isset 'PREVIEW' && RUN=echo
+  # try to resolve duplicity path for usage with python interpreter
+  DUPL_BIN=$(which "$BIN") || DUPL_BIN="$BIN"
+  BIN="$(qw "$(python_binary)") $(qw "$DUPL_BIN")"
+
 $RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
- ${DUPL_PRECMD} duplicity $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
+${DUPL_PRECMD} $BIN $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
  $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS ${PREVIEW:+}
 
   local ERR=$?
@@ -1181,7 +1211,7 @@ function date_fix {
 		echo $date && return
 	## some date commands do not support giving a time w/o setting it systemwide (irix,solaris,others?)
 	# python fallback
-	date=$(python -c "import time;print time.strftime('${1:-$DEFAULTFORMAT}',time.localtime(${2}))" 2> /dev/null) && \
+	date=$("$(python_binary)" -c "import time;print time.strftime('${1:-$DEFAULTFORMAT}',time.localtime(${2}))" 2> /dev/null) && \
 		echo $date && return
 	# awk fallback
 	date=$(awk "BEGIN{print strftime(\"${1:-$DEFAULTFORMAT}\"${2:+,$2})}" 2> /dev/null) && \
@@ -1227,7 +1257,7 @@ function var_isset {
 
 function url_encode {
   # utilize python, silently do nothing on error - because no python no duplicity
-  OUT=$(python -c "
+  OUT=$("$(python_binary)" -c "
 try: import urllib.request as urllib
 except ImportError: import urllib
 print(urllib.${2}quote('$1'));
@@ -1503,13 +1533,18 @@ function gpg_pass_pipein {
 # 0 on success
 # 1 if GPG_AGENT_INFO is not set
 # 2 if GPG_AGENT_INFO is stale
+# 3 cannot connect to gpg-agent
 function gpg_agent_avail {
   local ERR=1
   if var_isset GPG_AGENT_INFO; then
-    ps -p $(echo $GPG_AGENT_INFO|awk -F: '{print $2}') > /dev/null 2>&1  &&\
-    ERR=0 || ERR=2
+    ps -p $(echo $GPG_AGENT_INFO|awk -F: '{print $2}') > /dev/null 2>&1  && \
+      ERR=0 || ERR=2
+  else
+    # GPG_AGENT_INFO is deprecated in gpg2.1, 
+    # so we try to connect to a possibly running agent here
+    gpg-agent > /dev/null 2>&1 && ERR=0 || ERR=3
   fi
-  
+
   return $ERR
 }
 
@@ -1525,12 +1560,12 @@ function gpg_binary {
 }
 
 function gpg_avail {
-  lookup $(gpg_binary)
+  lookup "$(gpg_binary)"
 }
 
 # enforce the use our selected gpg binary
 function gpg {
-  command $(gpg_binary) "$@"
+  command "$(gpg_binary)" "$@"
 }
 export -f gpg
 
@@ -1621,7 +1656,7 @@ duplicity_version_get
 duplicity_version_check
 
 # check for certain important helper programs
-for f in awk grep; do
+for f in awk grep "$(python_binary)"; do
   lookup "$f" || \
     error_path "$f missing. installed und available in path?"
 done
@@ -1784,8 +1819,50 @@ using_info
 
 # GPG create key settings, config check2 (needs gpg) ##########################
 if gpg_disabled; then
-	: # the following tests are not necessary
+  : # the following tests are not necessary
 else
+
+# pw set? 
+# symmetric needs one, always
+if gpg_symmetric && ( [ -z "$GPG_PW" ] || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ] ) \
+  ; then
+  error_gpg "Encryption passphrase GPG_PW (needed for symmetric encryption) 
+is empty/not set or still default value in conf file 
+'$CONF'."
+fi
+# this is a technicality, we can only pump one pass via pipe into gpg
+# but symmetric already always needs one for encryption
+if gpg_symmetric && var_isset GPG_PW && var_isset GPG_PW_SIGN &&\
+  [ -n "$GPG_PW_SIGN" ] && [ "$GPG_PW" != "$GPG_PW_SIGN" ]; then
+  error_gpg "GPG_PW _and_ GPG_PW_SIGN are defined but not identical in config
+'$CONF'.
+This is unfortunately impossible. For details see duplicity manpage, 
+section 'A Note On Symmetric Encryption And Signing'.
+
+Tip: Separate signing keys may have empty passwords e.g. GPG_PW_SIGN=''.
+Tip2: Use gpg-agent."
+fi
+
+# we test this early as any invocation gpg2.1+ starts gpg-agent automatically
+# key enc can deal without, but might profit from gpg-agent
+# if GPG_PW is not set alltogether
+# if signing key is different from first (main) enc key (we can only pipe one pass into gpg)
+if ! gpg_symmetric && \
+   ( ! var_isset GPG_PW || \
+     ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC_ARRAY[0]}" ] ) ); then
+
+  GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
+  if [ "$GPG_AGENT_ERR" -eq 1 ]; then
+    warning "Cannot use gpg-agent. GPG_AGENT_INFO not set."
+  elif [ "$GPG_AGENT_ERR" -eq 2 ]; then
+    warning "Cannot use gpg-agent! GPG_AGENT_INFO contains stale pid."
+  elif [ "$GPG_AGENT_ERR" -eq 3 ]; then
+    warning "No running gpg-agent found although GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
+  else
+    echo "Enable gpg-agent usage. Running gpg-agent instance found and GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
+    GPG_USEAGENT="--use-agent"
+  fi
+fi
 
 # key set?
 if [ "$GPG_KEY" == "${DEFAULT_GPG_KEY}" ]; then 
@@ -1850,44 +1927,6 @@ else
   fi
 fi
 
-# pw set? 
-# symmetric needs one, always
-if gpg_symmetric && ( [ -z "$GPG_PW" ] || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ] ) \
-  ; then
-  error_gpg "Encryption passphrase GPG_PW (needed for symmetric encryption) 
-is empty/not set or still default value in conf file 
-'$CONF'."
-fi
-# this is a technicality, we can only pump one pass via pipe into gpg
-# but symmetric already always needs one for encryption
-if gpg_symmetric && var_isset GPG_PW && var_isset GPG_PW_SIGN &&\
-  [ -n "$GPG_PW_SIGN" ] && [ "$GPG_PW" != "$GPG_PW_SIGN" ]; then
-  error_gpg "GPG_PW _and_ GPG_PW_SIGN are defined but not identical in config
-'$CONF'.
-This is unfortunately impossible. For details see duplicity manpage, 
-section 'A Note On Symmetric Encryption And Signing'.
-
-Tip: Separate signing keys may have empty passwords e.g. GPG_PW_SIGN=''.
-Tip2: Use gpg-agent."
-fi
-# key enc can deal without, but might profit from gpg-agent
-# if GPG_PW is not set alltogether
-# if signing key is different from first (main) enc key (we can only pipe one pass into gpg)
-if ! gpg_symmetric && \
-   ( ! var_isset GPG_PW || \
-     ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC_ARRAY[0]}" ] ) ); then
-
-  GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
-  if [ "$GPG_AGENT_ERR" -eq 1 ]; then
-    echo "Cannot use gpg-agent. GPG_AGENT_INFO not set."
-  elif [ "$GPG_AGENT_ERR" -eq 2 ]; then
-    echo "Cannot use gpg-agent! GPG_AGENT_INFO contains stale pid."
-  else
-    echo "Autoenable use of gpg-agent. GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
-    GPG_USEAGENT="--use-agent"
-  fi
-fi
-
 # end GPG config plausibility check2 
 fi
 
@@ -1898,7 +1937,7 @@ CMD_MSG="Checking TEMP_DIR '${TEMP_DIR}' is a folder"
 run_cmd test -d "$TEMP_DIR"
 if [ "$?" != "0" ]; then
     error "Temporary file space '$TEMP_DIR' is not a directory."
-fi    
+fi
 # is tmp writeable
 CMD_MSG="Checking TEMP_DIR '${TEMP_DIR}' is writable"
 run_cmd test -w "$TEMP_DIR"
@@ -2055,15 +2094,6 @@ case "$(tolower "${TARGET_URL_PROT%%:*}")" in
     var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
     ;;
   *)
-    # add needed param for ssh backend
-    case "$(tolower "${TARGET_URL_PROT%%:*}")" in
-      'ssh'|'sftp'|'scp')
-        # ssh backend wants to be told that there is a pass to use
-        var_isset 'TARGET_URL_PASS' && \
-          DUPL_PARAMS="$DUPL_PARAMS --ssh-askpass" && \
-          BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
-        ;;
-    esac
     # rest uses FTP_PASS var
     var_isset 'TARGET_URL_PASS' && \
       BACKEND_PARAMS="FTP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
