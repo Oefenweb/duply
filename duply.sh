@@ -34,12 +34,16 @@
 #
 #
 #  CHANGELOG:
-#  1.11 ()
+#  1.11 (24.11.2015)
 #  - remove obsolete --ssh-askpass routine
 #  - add PYTHON conf var to allow global override of used python interpreter
-#  - enforced usage of "python2" in PATH as default interpreter globally
+#  - enforced usage of "python2" in PATH as default interpreter for internal
+#    use _and_ to run duplicity (setup.py changed the shebang to the fixed
+#    path /usr/bin/python until 0.7.05, which we circumvent this way)
 #  - featreq 36: support gpg-connect-agent as a means to detect if an agent is 
-#    running (conceptually contributed by Thomas Harning Jr.)
+#    running (thx Thomas Harning Jr.), used gpg-agent for detection though
+#  - quotewrapped run_cmd parameters to protect it from spaces eg. in TMP path
+#  - key export routine respects gpg-agent usage now
 #
 #  1.10.1 (19.8.2015)
 #  - bugfix 86: Duply+Swift outputs warning
@@ -429,7 +433,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.11dev"
+ME_VERSION="1.11"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -532,8 +536,9 @@ DESCRIPTION:
   It simplifies running duplicity with cron or on command line by:
 
     - keeping recurring settings in profiles per backup job
-    - enabling batch operations eg. backup_verify_purge
-    - executing pre/post scripts for every command
+    - enabling batch operations eg. backup_verify+purge
+    - executing pre/post scripts (different actions possible 
+      depending on previous or next command or it's exit status)
     - precondition checking for flawless duplicity operation
 
   For each backup job one configuration profile must be created.
@@ -1073,12 +1078,13 @@ function run_cmd {
   elif [ -n "$CMD_DISABLED" ]; then
     CMD_MSG="$CMD_MSG (DISABLED) - $CMD_DISABLED"
   else
+    echo -n -e "$CMD_MSG"
     CMD_OUT=` eval "$@" 2>&1 `
     CMD_ERR=$?
     if [ "$CMD_ERR" = "0" ]; then
-      CMD_MSG="$CMD_MSG (OK)"
+      CMD_MSG=" (OK)"
     else
-      CMD_MSG="$CMD_MSG (FAILED)"
+      CMD_MSG=" (FAILED)"
     fi
   fi
   echo -e "$CMD_MSG"
@@ -1346,7 +1352,7 @@ function gpg_import {
       FOUND=1
       
       CMD_MSG="Import keyfile '$FILE' to keyring"
-      run_cmd gpg $GPG_OPTS --batch --import "$FILE"
+      run_cmd gpg $GPG_OPTS --batch --import $(qw "$FILE")
       if [ "$?" != "0" ]; then 
         warning "Import failed.${CMD_OUT:+\n$CMD_OUT}"
         ERR=1
@@ -1373,7 +1379,7 @@ function gpg_import {
 with the command \"trust\" to \"ultimate\" (5) now.
 Exit the edit mode of gpg with \"quit\"."
   CMD_MSG="Running gpg to manually edit key '$KEY_ID'"
-  run_cmd sleep 5\; gpg $GPG_OPTS --edit-key "$KEY_ID"
+  run_cmd sleep 5\; gpg $GPG_OPTS --edit-key $(qw "$KEY_ID")
 
   return $ERR
 }
@@ -1394,15 +1400,15 @@ function gpg_export_if_needed {
       FILE="$(gpg_keyfile "$KEY_ID" $KEY_TYPE)"
       if [ ! -f "$FILE" ] && eval gpg_$(tolower $KEY_TYPE)_avail \"$KEY_ID\"; then
         # exporting
-        CMD_MSG="Export $KEY_TYPE key '$KEY_ID'"
+        CMD_MSG="Backup $KEY_TYPE key '$KEY_ID' to profile."
         # gpg2.1 insists on passphrase here, gpg2.0- happily exports w/o it
         # we pipe an empty string when GPG_PW is not set to avoid gpg silently waiting for input
-        run_cmd echo $(qw $GPG_PW) \| gpg $GPG_OPTS --passphrase-fd 0 --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)"" $(qw $KEY_ID) >> \"$TMPFILE\""
+        run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $GPG_OPTS $GPG_USEAGENT $(gpg_param_passwd GPG_PW_SIGN GPG_PW) --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)" $(qw "$KEY_ID") '>>' $(qw "$TMPFILE")
         CMD_ERR=$?
 
         if [ "$CMD_ERR" = "0" ]; then
           CMD_MSG="Write file '"$(basename "$FILE")"'"
-          run_cmd " mv \"$TMPFILE\" \"$FILE\""
+          run_cmd mv $(qw "$TMPFILE") $(qw "$FILE")
         fi
 
         if [ "$CMD_ERR" != "0" ]; then
@@ -1412,7 +1418,7 @@ function gpg_export_if_needed {
         fi
 
         # cleanup
-        rm "$TMPFILE" 1>/dev/null 2>&1
+        rm $(qw "$TMPFILE") 1>/dev/null 2>&1
       fi
     done
   done
@@ -1932,17 +1938,11 @@ fi
 
 # config plausibility check - SPACE ###########################################
 
-# is tmp is a folder
-CMD_MSG="Checking TEMP_DIR '${TEMP_DIR}' is a folder"
-run_cmd test -d "$TEMP_DIR"
+# is tmp is a folder and writable
+CMD_MSG="Checking TEMP_DIR '${TEMP_DIR}' is a folder and writable"
+run_cmd test -d $(qw "$TEMP_DIR") '&&' test -w $(qw "$TEMP_DIR")
 if [ "$?" != "0" ]; then
-    error "Temporary file space '$TEMP_DIR' is not a directory."
-fi
-# is tmp writeable
-CMD_MSG="Checking TEMP_DIR '${TEMP_DIR}' is writable"
-run_cmd test -w "$TEMP_DIR"
-if [ "$?" != "0" ]; then
-    error "Temporary file space '$TEMP_DIR' not writable."
+    error "Temporary file space '$TEMP_DIR' is not a directory or writable."
 fi
 
 
@@ -1967,7 +1967,7 @@ else
 GPG_TEST="$TEMP_DIR/${ME_NAME}.$$.$(date_fix %s)"
 function cleanup_gpgtest { 
   echo -en "Cleanup - Delete '${GPG_TEST}_*'"
-  rm ${GPG_TEST}_* 2>/dev/null && echo "(OK)" || echo "(FAILED)"
+  rm "${GPG_TEST}"_* 2>/dev/null && echo "(OK)" || echo "(FAILED)"
 }
 
 # signing enabled?
@@ -1984,7 +1984,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
   done
   # check encrypting
   CMD_MSG="Test - Encrypt to '$(join "','" "${GPG_KEYS_ENC_ARRAY[@]}")'${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o "${GPG_TEST}_ENC" -e "$ME_LONG"
+  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o $(qw "${GPG_TEST}_ENC") -e $(qw "$ME_LONG")
   CMD_ERR=$?
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -1998,7 +1998,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
   # check decrypting
   CMD_MSG="Test - Decrypt"
   gpg_key_decryptable || CMD_DISABLED="No matching secret key available."
-  run_cmd $(gpg_pass_pipein GPG_PW) gpg $(gpg_param_passwd GPG_PW) $GPG_OPTS -o "${GPG_TEST}_DEC" $GPG_USEAGENT -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $(gpg_param_passwd GPG_PW) $GPG_OPTS -o $(qw "${GPG_TEST}_DEC") $GPG_USEAGENT -d $(qw "${GPG_TEST}_ENC")
   CMD_ERR=$?
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -2009,7 +2009,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
 else
   # check encrypting
   CMD_MSG="Test - Encryption with passphrase${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o "${GPG_TEST}_ENC" --batch -c "$ME_LONG"
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o $(qw "${GPG_TEST}_ENC") --batch -c $(qw "$ME_LONG")
   CMD_ERR=$?
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Encryption failed.${CMD_OUT:+\n$CMD_OUT}"
@@ -2017,7 +2017,7 @@ else
 
   # check decrypting
   CMD_MSG="Test - Decryption with passphrase"
-  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS --passphrase-fd 0 -o "${GPG_TEST}_DEC" --batch -d "${GPG_TEST}_ENC"
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS --passphrase-fd 0 -o $(qw "${GPG_TEST}_DEC") --batch -d $(qw "${GPG_TEST}_ENC")
   CMD_ERR=$?
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Decryption failed.${CMD_OUT:+\n$CMD_OUT}"
