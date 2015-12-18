@@ -34,6 +34,10 @@
 #
 #
 #  CHANGELOG:
+#  1.11.1 (18.12.2015)
+#  - bugfix 89: "Duply has trouble with PYTHON-interpreter" on OSX homebrew
+#  - reverted duply's default PYTHON to 'python'
+#
 #  1.11 (24.11.2015)
 #  - remove obsolete --ssh-askpass routine
 #  - add PYTHON conf var to allow global override of used python interpreter
@@ -433,7 +437,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.11"
+ME_VERSION="1.11.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -444,7 +448,7 @@ DEFAULT_TARGET_PASS='_backend_password_'
 DEFAULT_GPG='gpg'
 DEFAULT_GPG_KEY='_KEY_ID_'
 DEFAULT_GPG_PW='_GPG_PASSWORD_'
-DEFAULT_PYTHON='python2'
+DEFAULT_PYTHON='python'
 
 # function definitions ##########################
 
@@ -803,9 +807,9 @@ SOURCE='${DEFAULT_SOURCE}'
 #  "trickle -s -u 640 -d 5120" # 5Mb up, 40Mb down"
 #DUPL_PRECMD=""
 
-# override the used python interpreter, defaults to "python2"
-#   e.g. "python" or "/usr/bin/python2.7"
-#PYTHON="python2"
+# override the used python interpreter, defaults to "python"
+#   e.g. "python2" or "/usr/bin/python2.7"
+#PYTHON="python"
 
 # exclude folders containing exclusion file (since duplicity 0.5.14)
 # Uncomment the following two lines to enable this setting.
@@ -1182,7 +1186,10 @@ function duplify { # the actual wrapper function
   var_isset 'PREVIEW' && RUN=echo
   # try to resolve duplicity path for usage with python interpreter
   DUPL_BIN=$(which "$BIN") || DUPL_BIN="$BIN"
-  BIN="$(qw "$(python_binary)") $(qw "$DUPL_BIN")"
+  # only run with a user specific python if configured (running by default
+  # breaks homebrew as they place a shell wrapper for duplicity in path)
+  [ -n "$PYTHON" ] && [ "$PYTHON" != "$DEFAULT_PYTHON" ] &&\
+    BIN="$(qw "$(python_binary)") $(qw "$DUPL_BIN")"
 
 $RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
 ${DUPL_PRECMD} $BIN $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
