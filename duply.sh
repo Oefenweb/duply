@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-###############################################################################
-#  duply (grown out of ftplicity), is a shell front end to duplicity that     #
-#  simplifies the usage by managing settings for backup jobs in profiles.     #
-#  It supports executing multiple commands in a batch mode to enable single   #
-#  line cron entries and executes pre/post backup scripts.                    #
-#  Since version 1.5.0 all duplicity backends are supported. Hence the name   #
-#  changed from ftplicity to duply.                                           #
-#  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.   #
-#  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany           #
-#  (c) 2008-2015 Edgar Soldin (changes since version 1.3)                     #
-###############################################################################
-#  LICENSE:                                                                   #
-#  This program is licensed under GPLv2.                                      #
-#  Please read the accompanying license information in gpl.txt.               #
-###############################################################################
+################################################################################
+#  duply (grown out of ftplicity), is a shell front end to duplicity that      #
+#  simplifies the usage by managing settings for backup jobs in profiles.      #
+#  It supports executing multiple commands in a batch mode to enable single    #
+#  line cron entries and executes pre/post backup scripts.                     #
+#  Since version 1.5.0 all duplicity backends are supported. Hence the name    #
+#  changed from ftplicity to duply.                                            #
+#  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.    #
+#  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany            #
+#  (c) 2008-2016 Edgar Soldin (changes since version 1.3)                      #
+################################################################################
+#  LICENSE:                                                                    #
+#  This program is licensed under GPLv2.                                       #
+#  Please read the accompanying license information in gpl.txt.                #
+################################################################################
 #  TODO/IDEAS/KNOWN PROBLEMS:
 #  - possibility to restore time frames (incl. deleted files)
 #    realizable by listing each backup and restore from 
@@ -32,8 +32,13 @@
 #  - hint on install software if a piece is missing
 #  - import/export profile from/to .tgz function !!!
 #
-#
 #  CHANGELOG:
+#  1.11.2 (11.2.2016)
+#  - fix "gpg: unsafe" version print out 
+#  - bugfix 91: v1.11 [r47] broke asymmetric encryption when using GPG_KEYS_ENC
+#  - bugfix 90: S3: TARGET_USER/PASS have no effect, added additional 
+#    documentation about needed env vars to template conf file
+#
 #  1.11.1 (18.12.2015)
 #  - bugfix 89: "Duply has trouble with PYTHON-interpreter" on OSX homebrew
 #  - reverted duply's default PYTHON to 'python'
@@ -400,7 +405,7 @@
 #    1.1.1 - bugfix: encryption reactivated
 #    1.1   - introduced config directory
 #    1.0   - first release
-###############################################################################
+################################################################################
 
 # utility functions overriding binaries
 
@@ -437,7 +442,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.11.1"
+ME_VERSION="1.11.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -521,7 +526,7 @@ function using_info {
   local GREP_VERSION=$( lookup grep && grep --version 2>&1 | awk 'NR<=2&&tolower($0)~/(busybox|grep.*[0-9]+\.[0-9]+)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
   local PYTHON_RUNNER=$(python_binary)
   local PYTHON_VERSION=$(lookup "$PYTHON_RUNNER" && "$PYTHON_RUNNER" -V 2>&1| awk '{print tolower($0);exit}' || echo "'$PYTHON_RUNNER' $NOTFOUND" )
-  local GPG_INFO=$(gpg_avail && gpg --version 2>&1| awk 'NR==1{v=$1" "$3};/^Home:/{print v" ("$0")"}' || echo "gpg $NOTFOUND")
+  local GPG_INFO=$(gpg_avail && gpg --version 2>&1| awk '/^gpg.*[0-9\.]+$/&&length(v)<1{v=$1" "$3}/^Home:/{h=" ("$0")"}END{print v""h}' || echo "gpg $NOTFOUND")
   local BASH_VERSION=$(bash --version | awk 'NR==1{IGNORECASE=1;sub(/GNU bash, version[ ]+/,"",$0);print $0}')
   echo -e "Using installed duplicity version ${DUPL_VERSION:-$NOTFOUND}\
 ${PYTHON_VERSION+, $PYTHON_VERSION${PYTHONPATH:+ 'PYTHONPATH=$PYTHONPATH'}}\
@@ -777,9 +782,9 @@ GPG_PW='${DEFAULT_GPG_PW}'
 #   sftp://bob:secret@backupserver.com//home/bob/dupbkp
 # for details and available backends see duplicity manpage, section URL Format
 #   http://duplicity.nongnu.org/duplicity.1.html#sect7
-# NOTE:
-#   some backends (eg. cloudfiles) need additional env vars to be set to
-#   work properly, when in doubt consult the man page mentioned above.
+# BE AWARE:
+#   some backends (cloudfiles, S3 etc.) need additional env vars to be set to
+#   work properly, read after the TARGET definition for more details.
 # ATTENTION:
 #   characters other than A-Za-z0-9.-_.~ in the URL have to be
 #   replaced by their url encoded pendants, see
@@ -789,15 +794,25 @@ GPG_PW='${DEFAULT_GPG_PW}'
 TARGET='${DEFAULT_TARGET}'
 # optionally the username/password can be defined as extra variables
 # setting them here _and_ in TARGET results in an error
+# ATTENTION:
+#   there are backends that do not support the user/pass auth scheme.
+#   prominent examples are S3, Azure, Cloudfiles. when in doubt consult the
+#   duplicity manpage. usually there is a NOTE section explaining if and which
+#   env vars should be set.
 #TARGET_USER='${DEFAULT_TARGET_USER}'
 #TARGET_PASS='${DEFAULT_TARGET_PASS}'
-# alternatively you might export the auth env vars for your backend here
-# when in doubt consult (if existing) the NOTE section of your backend on
-#  http://duplicity.nongnu.org/duplicity.1.html for details
 # eg. for cloud files backend it might look like this (uncomment for use!)
 #export CLOUDFILES_USERNAME='someuser'
 #export CLOUDFILES_APIKEY='somekey'
 #export CLOUDFILES_AUTHURL ='someurl'
+# the following is an incomplete list (<backend>: comma separated env vars list)
+# Azure: AZURE_ACCOUNT_NAME, AZURE_ACCOUNT_KEY
+# Cloudfiles: CLOUDFILES_USERNAME, CLOUDFILES_APIKEY, CLOUDFILES_AUTHURL
+# Google Cloud Storage: GS_ACCESS_KEY_ID, GS_SECRET_ACCESS_KEY
+# Pydrive: GOOGLE_DRIVE_ACCOUNT_KEY, GOOGLE_DRIVE_SETTINGS
+# S3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# Swift: SWIFT_USERNAME, SWIFT_PASSWORD, SWIFT_AUTHURL,
+#        SWIFT_TENANTNAME OR SWIFT_PREAUTHURL, SWIFT_PREAUTHTOKEN
 
 # base directory to backup
 SOURCE='${DEFAULT_SOURCE}'
@@ -1475,13 +1490,8 @@ function gpg_key_format {
   echo $1 | grep -q '^[0-9a-fA-F]\{8\}$'
 }
 
-#function gpg_split_keyset {
-#  return
-#  awk "BEGIN{ keys=toupper(\"$@\"); gsub(/[^A-Z0-9]/,\" \",keys); print keys }"
-#}
-
 # splits a comma separated line into lines, respects escaped commas
-function gpg_split_keyset2 {
+function gpg_split_keyset {
   local LIST
   LIST=$(echo "$@" | awk '{ gsub(/,/,"\n",$0); gsub(/\\\n/,",",$0); print $0 }')
   echo -e "$LIST"
@@ -1835,6 +1845,17 @@ if gpg_disabled; then
   : # the following tests are not necessary
 else
 
+# enc key still default?
+if [ "$GPG_KEY" == "${DEFAULT_GPG_KEY}" ]; then 
+  error_gpg "Encryption Key GPG_KEY still default in conf file 
+'$CONF'."
+fi
+
+# create array of gpg encr keys, for further processing
+OIFS="$IFS" IFS=$'\n'
+GPG_KEYS_ENC_ARRAY=( $( gpg_split_keyset ${GPG_KEY},${GPG_KEYS_ENC} ) )
+IFS="$OIFS"
+
 # pw set? 
 # symmetric needs one, always
 if gpg_symmetric && ( [ -z "$GPG_PW" ] || [ "$GPG_PW" == "${DEFAULT_GPG_PW}" ] ) \
@@ -1876,17 +1897,6 @@ if ! gpg_symmetric && \
     GPG_USEAGENT="--use-agent"
   fi
 fi
-
-# key set?
-if [ "$GPG_KEY" == "${DEFAULT_GPG_KEY}" ]; then 
-  error_gpg "Encryption Key GPG_KEY still default in conf file 
-'$CONF'."
-fi
-
-# create array of gpg encr keys, for further processing
-OIFS="$IFS" IFS=$'\n'
-GPG_KEYS_ENC_ARRAY=( $( gpg_split_keyset2 ${GPG_KEY},${GPG_KEYS_ENC} ) )
-IFS="$OIFS"
 
 # check gpg encr public keys availability
 for (( i = 0 ; i < ${#GPG_KEYS_ENC_ARRAY[@]} ; i++ )); do
