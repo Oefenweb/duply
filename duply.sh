@@ -33,6 +33,9 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  1.11.3 (29.5.2016)
+#  - fix wrong "WARNING: No running gpg-agent ..." when sign key was not set
+#
 #  1.11.2 (11.2.2016)
 #  - fix "gpg: unsafe" version print out 
 #  - bugfix 91: v1.11 [r47] broke asymmetric encryption when using GPG_KEYS_ENC
@@ -442,7 +445,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.11.2"
+ME_VERSION="1.11.3"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -1845,6 +1848,9 @@ if gpg_disabled; then
   : # the following tests are not necessary
 else
 
+# we test this early as any invocation gpg2.1+ starts gpg-agent automatically
+GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
+
 # enc key still default?
 if [ "$GPG_KEY" == "${DEFAULT_GPG_KEY}" ]; then 
   error_gpg "Encryption Key GPG_KEY still default in conf file 
@@ -1875,27 +1881,6 @@ section 'A Note On Symmetric Encryption And Signing'.
 
 Tip: Separate signing keys may have empty passwords e.g. GPG_PW_SIGN=''.
 Tip2: Use gpg-agent."
-fi
-
-# we test this early as any invocation gpg2.1+ starts gpg-agent automatically
-# key enc can deal without, but might profit from gpg-agent
-# if GPG_PW is not set alltogether
-# if signing key is different from first (main) enc key (we can only pipe one pass into gpg)
-if ! gpg_symmetric && \
-   ( ! var_isset GPG_PW || \
-     ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC_ARRAY[0]}" ] ) ); then
-
-  GPG_AGENT_ERR=$(gpg_agent_avail ; echo $?)
-  if [ "$GPG_AGENT_ERR" -eq 1 ]; then
-    warning "Cannot use gpg-agent. GPG_AGENT_INFO not set."
-  elif [ "$GPG_AGENT_ERR" -eq 2 ]; then
-    warning "Cannot use gpg-agent! GPG_AGENT_INFO contains stale pid."
-  elif [ "$GPG_AGENT_ERR" -eq 3 ]; then
-    warning "No running gpg-agent found although GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
-  else
-    echo "Enable gpg-agent usage. Running gpg-agent instance found and GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
-    GPG_USEAGENT="--use-agent"
-  fi
 fi
 
 # check gpg encr public keys availability
@@ -1947,6 +1932,26 @@ else
     gpg_import "${KEY_ID}" SEC
     gpg_key_cache RESET "${KEY_ID}"
     gpg_sec_avail "${KEY_ID}" || error_gpg_key "${KEY_ID}" "Private"
+  fi
+fi
+
+# using GPG_AGENT_ERR set early above, try to autoenable gpg-agent or issue some warnings
+# key enc can deal without, but might profit from gpg-agent
+# if GPG_PW is not set alltogether
+# if signing key is different from first (main) enc key (we can only pipe one pass into gpg)
+if ! gpg_symmetric && \
+   ( ! var_isset GPG_PW || \
+     ( gpg_signing && ! var_isset GPG_PW_SIGN && [ "$GPG_KEY_SIGN" != "${GPG_KEYS_ENC_ARRAY[0]}" ] ) ); then
+
+  if [ "$GPG_AGENT_ERR" -eq 1 ]; then
+    warning "Cannot use gpg-agent. GPG_AGENT_INFO not set."
+  elif [ "$GPG_AGENT_ERR" -eq 2 ]; then
+    warning "Cannot use gpg-agent! GPG_AGENT_INFO contains stale pid."
+  elif [ "$GPG_AGENT_ERR" -eq 3 ]; then
+    warning "No running gpg-agent found although GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
+  else
+    echo "Enable gpg-agent usage. Running gpg-agent instance found and GPG_PW or GPG_PW_SIGN (enc != sign key) not set."
+    GPG_USEAGENT="--use-agent"
   fi
 fi
 
