@@ -33,6 +33,23 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.0.1 (16.11.2016)
+#  - bugfix 104: Duply 2.0 sets wrong archive dir, --name always 'duply_'
+#
+#  2.0 (27.10.2016)
+#  made this a major version change, as we broke backward compatibility anyway
+#  (see last change in v1.10). got complaints that rightfully pointed out
+#  that should only come w/ a major version change. so, here we go ;)
+#  if your backend stops working w/ this version create a new profile and
+#  export the env vars needed as described in the comments of the conf file
+#  directly above the SOURCE setting.
+#  - making sure multi spaces in TARGET survive awk processing
+#  - new env var PROFILE exported to scripts 
+#  - fix 102: expose a unique timestamp variable for pre/post scripts
+#    actually a featreq. exporting RUN_START nanosec unix timestamp
+#  - fix 101: GPG_AGENT_INFO is 'bogus' (thx Thomas Harning Jr.)
+#  - fix 96: duply cannot handle two consecutive spaces in paths
+#
 #  1.11.3 (29.5.2016)
 #  - fix wrong "WARNING: No running gpg-agent ..." when sign key was not set
 #
@@ -445,7 +462,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="1.11.3"
+ME_VERSION="2.0.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -493,13 +510,12 @@ function set_config { # sets global config vars
 
   # remove trailing slash, get profile name etc.
   CONFDIR="${CONFDIR%/}"
-  NAME="${CONFDIR##*/}"
+  PROFILE="${CONFDIR##*/}"
   CONF="$CONFDIR/conf"
   PRE="$CONFDIR/pre"
   POST="$CONFDIR/post"
   EXCLUDE="$CONFDIR/exclude"
   KEYFILE="$CONFDIR/gpgkey.asc"
-  
 }
 
 function version_info { # print version information
@@ -671,8 +687,8 @@ PRE/POST SCRIPTS:
   Useful internal duply variables will be readable in the scripts.
   Some of interest may be
 
-    CONFDIR, SOURCE, TARGET_URL_<PROT|HOSTPATH|USER|PASS>, 
-    GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_<PREV|NEXT>, CMD_ERR
+    PROFILE, CONFDIR, SOURCE, TARGET_URL_<PROT|HOSTPATH|USER|PASS>, 
+    GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_<PREV|NEXT>, CMD_ERR, RUN_START
 
   The CMD_* variables were introduced to allow different actions according to 
   the command the scripts were attached to e.g. 'pre_bkp_post_pre_verify_post' 
@@ -1154,7 +1170,7 @@ function duplicity_params_global {
     if var_isset 'ARCH_DIR'; then
       DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
     fi
-    DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${NAME}")"
+DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
   fi
 
 DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
@@ -1190,9 +1206,9 @@ function duplify { # the actual wrapper function
     else
       # wrap in quotes to protect from spaces
       [ ! $PARAMSNOW ] && \
-        DUPL_CMD="$DUPL_CMD $(qw $param)" \
+        DUPL_CMD="$DUPL_CMD $(qw "$param")" \
       || \
-        DUPL_CMD_PARAMS="$DUPL_CMD_PARAMS $(qw $param)"
+        DUPL_CMD_PARAMS="$DUPL_CMD_PARAMS $(qw "$param")"
     fi
   done
 
@@ -1209,9 +1225,9 @@ function duplify { # the actual wrapper function
   [ -n "$PYTHON" ] && [ "$PYTHON" != "$DEFAULT_PYTHON" ] &&\
     BIN="$(qw "$(python_binary)") $(qw "$DUPL_BIN")"
 
-$RUN ${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
+$RUN "${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
 ${DUPL_PRECMD} $BIN $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
- $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS ${PREVIEW:+}
+ $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS"
 
   local ERR=$?
   return $ERR
@@ -1557,18 +1573,22 @@ function gpg_pass_pipein {
 
 # checks if gpg-agent is available, returns error code
 # 0 on success
-# 1 if GPG_AGENT_INFO is not set
+# 1 if GPG_AGENT_INFO is not set (unused, should probably be merged w/ 3)
 # 2 if GPG_AGENT_INFO is stale
 # 3 cannot connect to gpg-agent
 function gpg_agent_avail {
-  local ERR=1
+  # GPG_AGENT_INFO is deprecated in gpg2.1, 
+  # first try to connect to a possibly running agent here
+  local ERR=3
+  gpg-agent > /dev/null 2>&1 && return 0
+
+  # detect stale pid in legacy GPG_AGENT_INFO env var
   if var_isset GPG_AGENT_INFO; then
-    ps -p $(echo $GPG_AGENT_INFO|awk -F: '{print $2}') > /dev/null 2>&1  && \
-      ERR=0 || ERR=2
-  else
-    # GPG_AGENT_INFO is deprecated in gpg2.1, 
-    # so we try to connect to a possibly running agent here
-    gpg-agent > /dev/null 2>&1 && ERR=0 || ERR=3
+    # check if a pid matching process is running at all
+    local GPG_AGENT_PID=$(echo $GPG_AGENT_INFO|awk -F: '{print $2}')
+    if isnumber "$GPG_AGENT_PID"; then
+      ps -p "$GPG_AGENT_PID" > /dev/null 2>&1 || ERR=2
+    fi
   fi
 
   return $ERR
@@ -1723,7 +1743,7 @@ echo "Using profile '$CONFDIR'."
 secureconf
 
 # split TARGET in handy variables
-TARGET_SPLIT_URL=$(echo $TARGET | awk '{ \
+TARGET_SPLIT_URL=$(echo "$TARGET" | awk '{ \
   target=$0; match(target,/^([^\/:]+):\/\//); \
   prot=substr(target,RSTART,RLENGTH);\
   rest=substr(target,RSTART+RLENGTH); \
@@ -1750,7 +1770,7 @@ TARGET_SPLIT_URL=$(echo $TARGET | awk '{ \
      gsub(/[\047]/,"\047\\\047\047",pass);\
      print "TARGET_URL_PASS=$(url_decode \047"pass"\047)\n"}\
   }')
-eval ${TARGET_SPLIT_URL}
+eval "${TARGET_SPLIT_URL}"
 
 # fetch commmand from parameters ########################################################
 # Hint: cmds is also used to check if authentification info sufficient in the next step 
@@ -2180,14 +2200,16 @@ nextno=$(($CMD_NO+1))
 prevno=$(( $CMD_NO - ${CMD_SKIPPED-0} - 1 )); unset CMD_SKIPPED
 [ "$prevno" -ge 0 ] && CMD_PREV=${CMDS[$prevno]} || CMD_PREV='START'
 
-# export some useful env vars for external scripts/programs to use
-export CONFDIR SOURCE TARGET_URL_PROT TARGET_URL_HOSTPATH \
-       TARGET_URL_USER TARGET_URL_PASS \
-       GPG_KEYS_ENC=$(join "\n" "${GPG_KEYS_ENC_ARRAY[@]}") GPG_KEY_SIGN \
-       GPG_PW CMD_PREV CMD_NEXT CMD_ERR
-
 # save start time
 RUN_START=$(date_fix %s)$(nsecs)
+
+# export some useful env vars for external scripts/programs to use
+export PROFILE CONFDIR SOURCE TARGET_URL_PROT TARGET_URL_HOSTPATH \
+       TARGET_URL_USER TARGET_URL_PASS \
+       GPG_KEYS_ENC=$(join "\n" "${GPG_KEYS_ENC_ARRAY[@]}") GPG_KEY_SIGN \
+       GPG_PW CMD_PREV CMD_NEXT CMD_ERR \
+       RUN_START
+
 # user info
 echo; separator "Start running command $(toupper $cmd) at $(date_from_nsecs $RUN_START)"
 
