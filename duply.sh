@@ -33,6 +33,9 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.0.1 (16.11.2016)
+#  - bugfix 104: Duply 2.0 sets wrong archive dir, --name always 'duply_'
+#
 #  2.0 (27.10.2016)
 #  made this a major version change, as we broke backward compatibility anyway
 #  (see last change in v1.10). got complaints that rightfully pointed out
@@ -459,7 +462,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.0"
+ME_VERSION="2.0.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -1167,7 +1170,7 @@ function duplicity_params_global {
     if var_isset 'ARCH_DIR'; then
       DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
     fi
-    DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${NAME}")"
+    DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
   fi
 
 DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
