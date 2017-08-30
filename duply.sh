@@ -33,8 +33,15 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.0.2 (23.05.2017)
+#  - bugfix: never insert creds into file:// targets
+#  - bugfix: avail profiles hint sometimes shortend the names by one char
+#  - bugfix 108: CMD_NEXT variable should ignore conditional commands (and, or)
+#  - export condition before/after next/prev command as CND_PREV,CND_NEXT now
+#  - bugfix 97: Unknown command should be ERROR, not WARNING 
+#
 #  2.0.1 (16.11.2016)
-#  - bugfix 104: Duply 2.0 sets wrong archive dir, --name always 'duply_'
+#  - bugfix 104: Duply 2.0 sets wrong archive dir, --name was always 'duply_'
 #
 #  2.0 (27.10.2016)
 #  made this a major version change, as we broke backward compatibility anyway
@@ -43,6 +50,7 @@
 #  if your backend stops working w/ this version create a new profile and
 #  export the env vars needed as described in the comments of the conf file
 #  directly above the SOURCE setting.
+#  Changes:
 #  - making sure multi spaces in TARGET survive awk processing
 #  - new env var PROFILE exported to scripts 
 #  - fix 102: expose a unique timestamp variable for pre/post scripts
@@ -436,7 +444,8 @@ function grep {
 
 # implement basename in plain bash
 function basename {
-  echo "${1##*/}"
+  local stripped="${1%/}"
+  echo "${stripped##*/}"
 }
 
 # implement dirname in plain bash
@@ -462,7 +471,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.0.1"
+ME_VERSION="2.0.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -684,11 +693,11 @@ TIME FORMATS:
     1h78m (interval, 1 hour 78 minutes ago)
 
 PRE/POST SCRIPTS:
-  Useful internal duply variables will be readable in the scripts.
-  Some of interest may be
+  Some useful internal duply variables are exported to the scripts.
 
     PROFILE, CONFDIR, SOURCE, TARGET_URL_<PROT|HOSTPATH|USER|PASS>, 
-    GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_<PREV|NEXT>, CMD_ERR, RUN_START
+    GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_<PREV|NEXT>, CMD_ERR, RUN_START,
+    CND_<PREV|NEXT> (condition before/after next/prev command)
 
   The CMD_* variables were introduced to allow different actions according to 
   the command the scripts were attached to e.g. 'pre_bkp_post_pre_verify_post' 
@@ -1170,7 +1179,7 @@ function duplicity_params_global {
     if var_isset 'ARCH_DIR'; then
       DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
     fi
-    DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
+DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
   fi
 
 DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
@@ -1300,6 +1309,11 @@ function var_isset {
     return 0
   fi
   return 1
+}
+
+function is_condition {
+  local CMD=$(tolower "$@")
+  [ "$CMD" == 'and' ] || [ "$CMD" == 'or' ]
 }
 
 function url_encode {
@@ -1715,7 +1729,7 @@ if [ ! -d "$CONFDIR" ]; then
 '$CONFDIR'.
 
 Hints:
- Select one of the available profiles: $(ls -1p $(dirname "$CONFDIR")|  awk 'BEGIN{ORS="";OFS=""}/\/$/&&!/^\.+\/$/{print sep"\047"substr($0,0,length($0)-1)"\047";sep=","}').
+Select one of the available profiles: $(for d in "$(dirname "$CONFDIR")"/*/; do [ -e "$d" ] || [ -L "$d" ] || continue; printf "$sep'$(basename "$d")'"; sep=",";done)
  Use '$ME <name> create' to create a new profile.
  Use '$ME usage' to get usage help."
 elif [ ! -x "$CONFDIR" ]; then
@@ -2100,8 +2114,10 @@ var_isset 'TARGET_URL_PASS' && TARGET_URL_PASS="$(url_decode "$TARGET_URL_PASS")
 var_isset 'TARGET_USER' && TARGET_URL_USER="$TARGET_USER"
 var_isset 'TARGET_PASS' && TARGET_URL_PASS="$TARGET_PASS"
 
+TARGET_URL_PROT_lowercase="$(tolower "${TARGET_URL_PROT%%:*}")"
+
 # issue some warnings
-case "$(tolower "${TARGET_URL_PROT%%:*}")" in
+case "$TARGET_URL_PROT_lowercase" in
   'cf+http')
     # info on missing AUTH_URL
     if ! var_isset 'CLOUDFILES_AUTHURL'; then
@@ -2131,7 +2147,7 @@ esac
 # for all protocols we put username in url and pass into env var 
 # for secúrity reasons, we url_encode username to protect special chars
 # first sortout backends with special ways to handle password
-case "$(tolower "${TARGET_URL_PROT%%:*}")" in
+case "$TARGET_URL_PROT_lowercase" in
   'imap'|'imaps')
     var_isset 'TARGET_URL_PASS' && BACKEND_PARAMS="IMAP_PASSWORD=$(qw "${TARGET_URL_PASS}")"
     ;;
@@ -2142,7 +2158,7 @@ case "$(tolower "${TARGET_URL_PROT%%:*}")" in
     ;;
 esac
 # insert url encoded username into target url if needed
-if var_isset 'TARGET_URL_USER'; then
+if var_isset 'TARGET_URL_USER' && [ "$TARGET_URL_PROT_lowercase" != "file" ]; then
   BACKEND_URL="${TARGET_URL_PROT}$(url_encode "${TARGET_URL_USER}")@${TARGET_URL_HOSTPATH}"
 else
   BACKEND_URL="$TARGET"
@@ -2161,6 +2177,8 @@ EXCLUDE_PARAM="--exclude$(duplicity_version_lt 703 && echo -globbing)-filelist"
 cmds=$(awk -v cmds="$cmds" "BEGIN{ gsub(/\+/,\"_and_\",cmds); gsub(/\-/,\"_or_\",cmds); print cmds}")
 # convert cmds to array, lowercase for safety
 CMDS=( $(awk "BEGIN{ cmds=tolower(\"$cmds\"); gsub(/_/,\" \",cmds); print cmds }") )
+
+unset FTPL_ERR
 
 # run cmds
 for cmd in ${CMDS[*]};
@@ -2193,12 +2211,38 @@ if [ -n "$SKIP_NOW" ]; then
   continue
 fi
 
-# get prev/nextcmd vars
+unset CMD_VALUE CMD_NEXT CMD_PREV CND_NEXT CND_PREV
+
+# get next cmd,cnd vars
 nextno=$(($CMD_NO+1))
-[ "$nextno" -lt "${#CMDS[@]}" ] && CMD_NEXT=${CMDS[$nextno]} || CMD_NEXT='END'
-# get previous command minus skipped commands
+while ! var_isset 'CMD_NEXT'
+do
+  if [ "$nextno" -lt "${#CMDS[@]}" ]; then
+    CMD_VALUE=${CMDS[$nextno]}
+    is_condition "$CMD_VALUE" && CND_NEXT="$CMD_VALUE" || CMD_NEXT="$CMD_VALUE"
+  else
+    CMD_NEXT='END'
+  fi
+  nextno=$(($nextno+1))
+done
+
+# get prev cnd, cnd are skipped pseudocmds
+prevno=$(( $CMD_NO - 1 ))
+CMD_VALUE=${CMDS[$prevno]}
+is_condition "$CMD_VALUE" && [ "$prevno" -ge 0 ] && CND_PREV=${CMDS[$prevno]}
+
+# get prev cmd command minus skipped commands, only executed
 prevno=$(( $CMD_NO - ${CMD_SKIPPED-0} - 1 )); unset CMD_SKIPPED
-[ "$prevno" -ge 0 ] && CMD_PREV=${CMDS[$prevno]} || CMD_PREV='START'
+while ! var_isset 'CMD_PREV'
+do
+  if [ "$prevno" -ge 0 ]; then
+    CMD_VALUE=${CMDS[$prevno]}
+    is_condition "$CMD_VALUE" || CMD_PREV="$CMD_VALUE"
+  else
+    CMD_PREV='START'
+  fi
+  prevno=$(($prevno-1))
+done
 
 # save start time
 RUN_START=$(date_fix %s)$(nsecs)
@@ -2207,7 +2251,7 @@ RUN_START=$(date_fix %s)$(nsecs)
 export PROFILE CONFDIR SOURCE TARGET_URL_PROT TARGET_URL_HOSTPATH \
        TARGET_URL_USER TARGET_URL_PASS \
        GPG_KEYS_ENC=$(join "\n" "${GPG_KEYS_ENC_ARRAY[@]}") GPG_KEY_SIGN \
-       GPG_PW CMD_PREV CMD_NEXT CMD_ERR \
+       GPG_PW CMD_PREV CMD_NEXT CMD_ERR CND_PREV CND_NEXT\
        RUN_START
 
 # user info
@@ -2305,7 +2349,10 @@ case "$(tolower $cmd)" in
     duplify collection-status -- "${dupl_opts[@]}" "$BACKEND_URL"
     ;;    
   *)
-    warning "Unknown command '$cmd'."
+    error "  Unknown command '$cmd'.
+
+  Hint:
+    Use '$ME usage' to get usage help."
     ;;
 esac
 
