@@ -33,6 +33,10 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.0.3 (29.08.2017)
+#  - bugfix: "line 2231: CMDS: bad array subscript"
+#  - bugfix 112: "env: illegal option -- u" on MacOSX
+#
 #  2.0.2 (23.05.2017)
 #  - bugfix: never insert creds into file:// targets
 #  - bugfix: avail profiles hint sometimes shortend the names by one char
@@ -439,7 +443,7 @@
 
 # wrap grep to override possible env set GREP_OPTIONS=--color=always
 function grep {
-  command env -u GREP_OPTIONS grep "$@"
+  command env "GREP_OPTIONS=" grep "$@"
 }
 
 # implement basename in plain bash
@@ -471,7 +475,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.0.2"
+ME_VERSION="2.0.3"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -2145,7 +2149,7 @@ esac
 
 
 # for all protocols we put username in url and pass into env var 
-# for secúrity reasons, we url_encode username to protect special chars
+# for secï¿½rity reasons, we url_encode username to protect special chars
 # first sortout backends with special ways to handle password
 case "$TARGET_URL_PROT_lowercase" in
   'imap'|'imaps')
@@ -2214,7 +2218,7 @@ fi
 unset CMD_VALUE CMD_NEXT CMD_PREV CND_NEXT CND_PREV
 
 # get next cmd,cnd vars
-nextno=$(($CMD_NO+1))
+nextno=$(( $CMD_NO + 1 ))
 while ! var_isset 'CMD_NEXT'
 do
   if [ "$nextno" -lt "${#CMDS[@]}" ]; then
@@ -2228,8 +2232,7 @@ done
 
 # get prev cnd, cnd are skipped pseudocmds
 prevno=$(( $CMD_NO - 1 ))
-CMD_VALUE=${CMDS[$prevno]}
-is_condition "$CMD_VALUE" && [ "$prevno" -ge 0 ] && CND_PREV=${CMDS[$prevno]}
+[ "$prevno" -ge 0 ] && is_condition "${CMDS[$prevno]}" && CND_PREV=${CMDS[$prevno]}
 
 # get prev cmd command minus skipped commands, only executed
 prevno=$(( $CMD_NO - ${CMD_SKIPPED-0} - 1 )); unset CMD_SKIPPED
