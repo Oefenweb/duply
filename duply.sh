@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                            #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.    #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany            #
-#  (c) 2008-2016 Edgar Soldin (changes since version 1.3)                      #
+#  (c) 2008-2017 Edgar Soldin (changes since version 1.3)                      #
 ################################################################################
 #  LICENSE:                                                                    #
 #  This program is licensed under GPLv2.                                       #
@@ -33,6 +33,12 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.0.4 (20.02.2018)
+#  - bugfix 114: "duply usage is not current" wrt. purgeFull/Incr
+#  - bugfix 115: typo in error message - "Not GPG_KEY entries" should be "No"
+#  - bugfix 117: no duply_ prefix when ARCH_DIR is set in conf
+#  - bugfix debian 882159: duply: occasionally shows negative runtimes
+#
 #  2.0.3 (29.08.2017)
 #  - bugfix: "line 2231: CMDS: bad array subscript"
 #  - bugfix 112: "env: illegal option -- u" on MacOSX
@@ -475,7 +481,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.0.3"
+ME_VERSION="2.0.4"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -683,7 +689,8 @@ COMMANDS:
   version    show version information of $ME_NAME and needed programs
 
 OPTIONS:
-  --force    passed to duplicity (see commands: purge, purge-full, cleanup)
+  --force    passed to duplicity (see commands: 
+             purge, purgeFull, purgeIncr, cleanup)
   --preview  do nothing but print out generated duplicity command lines
   --disable-encryption  
              disable encryption, overrides profile settings
@@ -867,12 +874,12 @@ SOURCE='${DEFAULT_SOURCE}'
 # see duplicity man page, chapter TIME_FORMATS)
 #MAX_AGE=1M
 
-# Number of full backups to keep. Used for the "purge-full" command. 
+# Number of full backups to keep. Used for the "purgeFull" command. 
 # See duplicity man page, action "remove-all-but-n-full".
 #MAX_FULL_BACKUPS=1
 
 # Number of full backups for which incrementals will be kept for.
-# Used for the "purge-incr" command.
+# Used for the "purgeIncr" command.
 # See duplicity man page, action "remove-all-inc-of-but-n-full".
 #MAX_FULLS_WITH_INCRS=1
 
@@ -1182,8 +1189,15 @@ function duplicity_params_global {
     local DUPL_ARCHDIR=''
     if var_isset 'ARCH_DIR'; then
       DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
+      # reuse erronously duply_ prefixed folders from bug #117
+      if [ -d "$ARCH_DIR/duply_${PROFILE}" ]; then
+        DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
+      else
+        DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "${PROFILE}")"
+      fi
+    else
+      DUPL_ARCHDIR="--name $(qw "duply_${PROFILE}")"
     fi
-DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
   fi
 
 DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
@@ -1260,6 +1274,8 @@ permissions are not safe ($PERMS). Secure them now. - ($(error_to_string $ERR))"
 # params are $1=timeformatstring (default like date output), $2=epoch seconds since 1.1.1970 (default now)
 function date_fix {
 	local DEFAULTFORMAT='%a %b %d %H:%M:%S %Z %Y'
+	local date
+	#[ "$1" == "%N" ] && return #test the no nsec test below
 	# gnu date with -d @epoch
 	date=$(date ${2:+-d @$2} ${1:++"$1"} 2> /dev/null) && \
 		echo $date && return
@@ -1285,9 +1301,19 @@ function date_fix {
 }
 
 function nsecs {
-	# only 9 digit returns, e.g. not all date(s) deliver nsecs
-	local NSECS=$(date +%N 2> /dev/null | head -1 |grep -e "^[[:digit:]]\{9\}$")
-	echo ${NSECS:-000000000}
+	local NSECS
+	# test if date supports nanosecond output
+	if ! var_isset NSECS_DISABLED; then
+		NSECS=$(date_fix %N 2> /dev/null | head -1 |grep -e "^[[:digit:]]\{9\}$")
+		[ -n "$NSECS" ] && NSECS_DISABLED=0 || NSECS_DISABLED=1
+	fi
+
+	# add 9 digits, not all date(s) deliver nsecs eg. busybox date
+	if [ "$NSECS_DISABLED" == "1" ]; then
+		date_fix %s000000000
+	else
+		date_fix %s%N
+	fi
 }
 
 function nsecs_to_sec {
@@ -1941,7 +1967,7 @@ if ! gpg_signing; then
 elif ! var_isset 'GPG_KEY_SIGN'; then
   KEY_ID="${GPG_KEYS_ENC_ARRAY[0]}"
   if [ -z "${KEY_ID}" ]; then
-    echo "Signing disabled. Not GPG_KEY entries in config."
+    echo "Signing disabled. No GPG_KEY entries in config."
     GPG_KEY_SIGN='disabled'
   else  
     # use avail OR try import OR fail
@@ -2248,7 +2274,7 @@ do
 done
 
 # save start time
-RUN_START=$(date_fix %s)$(nsecs)
+RUN_START=$(nsecs)
 
 # export some useful env vars for external scripts/programs to use
 export PROFILE CONFDIR SOURCE TARGET_URL_PROT TARGET_URL_HOSTPATH \
@@ -2360,7 +2386,7 @@ case "$(tolower $cmd)" in
 esac
 
 CMD_ERR=$?
-RUN_END=$(date_fix %s)$(nsecs)
+RUN_END=$(nsecs)
 RUNTIME=$(( $RUN_END - $RUN_START ))
 
 # print message on error; set error code
