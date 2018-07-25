@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                            #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.    #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany            #
-#  (c) 2008-2017 Edgar Soldin (changes since version 1.3)                      #
+#  (c) 2008-2018 Edgar Soldin (changes since version 1.3)                      #
 ################################################################################
 #  LICENSE:                                                                    #
 #  This program is licensed under GPLv2.                                       #
@@ -33,6 +33,16 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.1 (23.07.2018)
+#  - be more verbose when duplicity version detection fails
+#  - using info shows python binary's path for easier identification now
+#  - reworked python interpreter handling, it's either
+#      configured per PYTHON var
+#      unconfigured, parsed from duplicity shebang
+#      or set to current duplicity default 'python2' (was 'python' until now)
+#  - do not quotewrap strings because of slashes (eg. paths) anymore
+#  - bugfix: improved in/exclude stripping from conf DUPL_PARAMS
+#
 #  2.0.4 (20.02.2018)
 #  - bugfix 114: "duply usage is not current" wrt. purgeFull/Incr
 #  - bugfix 115: typo in error message - "Not GPG_KEY entries" should be "No"
@@ -476,12 +486,26 @@ function lookup {
   ( [ "${bin##*/}" == "$bin" ] && hash "$bin" 2>/dev/null ) || [ -x "$bin" ]
 }
 
+# the python binary to use, exit code 0 when configured, else 1
+function python_binary {
+  # if unset, parse from duplicity shebang
+  if ! var_isset 'PYTHON'; then
+    duplicity_python_binary_parse;
+    echo $DUPL_PYTHON_BIN;
+    return 1;
+  else
+    # tell if PYTHON was configured manually
+    echo $PYTHON;
+    return 0
+  fi
+}
+
 # important definitions #######################################################
 
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.0.4"
+ME_VERSION="2.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -492,7 +516,7 @@ DEFAULT_TARGET_PASS='_backend_password_'
 DEFAULT_GPG='gpg'
 DEFAULT_GPG_KEY='_KEY_ID_'
 DEFAULT_GPG_PW='_GPG_PASSWORD_'
-DEFAULT_PYTHON='python'
+DEFAULT_PYTHON='python2'
 
 # function definitions ##########################
 
@@ -552,22 +576,21 @@ $(version_info)
 END
 }
 
-function python_binary {
-  echo "${PYTHON-$DEFAULT_PYTHON}"
-}
-
 function using_info {
-  lookup duplicity && duplicity_version_get
-  local NOTFOUND="MISSING"
+  # init needed vars into global name space
+  lookup duplicity && { duplicity_python_binary_parse; duplicity_version_get; }
+  local NOTFOUND="INVALID"
+  local AWK_VERSION GREP_VERSION PYTHON_RUNNER
   # freebsd awk (--version only), debian mawk (-W version only), deliver '' so awk does not wait for input
-  local AWK_VERSION=$( lookup awk && (awk --version 2>/dev/null || awk -W version 2>&1) | awk 'NR<=2&&tolower($0)~/(busybox|awk)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
-  local GREP_VERSION=$( lookup grep && grep --version 2>&1 | awk 'NR<=2&&tolower($0)~/(busybox|grep.*[0-9]+\.[0-9]+)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
-  local PYTHON_RUNNER=$(python_binary)
+  AWK_VERSION=$( lookup awk && (awk --version 2>/dev/null || awk -W version 2>&1) | awk 'NR<=2&&tolower($0)~/(busybox|awk)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
+  GREP_VERSION=$( lookup grep && grep --version 2>&1 | awk 'NR<=2&&tolower($0)~/(busybox|grep.*[0-9]+\.[0-9]+)/{success=1;print;exit} END{if(success<1) print "unknown"}' || echo "$NOTFOUND" )
+  PYTHON_RUNNER=$(python_binary)
   local PYTHON_VERSION=$(lookup "$PYTHON_RUNNER" && "$PYTHON_RUNNER" -V 2>&1| awk '{print tolower($0);exit}' || echo "'$PYTHON_RUNNER' $NOTFOUND" )
   local GPG_INFO=$(gpg_avail && gpg --version 2>&1| awk '/^gpg.*[0-9\.]+$/&&length(v)<1{v=$1" "$3}/^Home:/{h=" ("$0")"}END{print v""h}' || echo "gpg $NOTFOUND")
   local BASH_VERSION=$(bash --version | awk 'NR==1{IGNORECASE=1;sub(/GNU bash, version[ ]+/,"",$0);print $0}')
+  # print out
   echo -e "Using installed duplicity version ${DUPL_VERSION:-$NOTFOUND}\
-${PYTHON_VERSION+, $PYTHON_VERSION${PYTHONPATH:+ 'PYTHONPATH=$PYTHONPATH'}}\
+${PYTHON_VERSION+, $PYTHON_VERSION ${PYTHON_RUNNER:+($(which "$PYTHON_RUNNER"))}${PYTHONPATH:+ 'PYTHONPATH=$PYTHONPATH'}}\
 ${GPG_INFO:+, $GPG_INFO}${AWK_VERSION:+, awk '${AWK_VERSION}'}${GREP_VERSION:+, grep '${GREP_VERSION}'}\
 ${BASH_VERSION:+, bash '${BASH_VERSION}'}."
 }
@@ -861,7 +884,8 @@ SOURCE='${DEFAULT_SOURCE}'
 #  "trickle -s -u 640 -d 5120" # 5Mb up, 40Mb down"
 #DUPL_PRECMD=""
 
-# override the used python interpreter, defaults to "python"
+# override the used python interpreter, defaults to
+#  - parsed result of duplicity's shebang or 'python2'
 #   e.g. "python2" or "/usr/bin/python2.7"
 #PYTHON="python"
 
@@ -1069,32 +1093,45 @@ function error_to_string {
 }
 
 function duplicity_version_get {
-	var_isset DUPL_VERSION && return
-	DUPL_VERSION=`duplicity --version 2>&1 | awk '/^duplicity /{print $2; exit;}'`
-	#DUPL_VERSION='0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
-	DUPL_VERSION_VALUE=0
-	DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
-	if (match(v,/[^\.0-9]+[0-9]*$/)){
-		rest=substr(v,RSTART,RLENGTH);v=substr(v,0,RSTART-1);}
-	if (pos=match(rest,/RC([0-9]+)$/)) rc=substr(rest,pos+2)
-	split(v,f,"[. ]"); if(f[1]f[2]f[3]~/^[0-9]+$/) vvalue=f[1]*10000+f[2]*100+f[3]; else vvalue=0
-	print "#"v"_"rest"("rc"):"f[1]"-"f[2]"-"f[3]
-	print "DUPL_VERSION_VALUE=\047"vvalue"\047"
-	print "DUPL_VERSION_RC=\047"rc"\047"
-	print "DUPL_VERSION_SUFFIX=\047"rest"\047"
-	}')
-	eval "$DUPL_VERSION_AWK"
-	#echo -e ",$DUPL_VERSION,$DUPL_VERSION_VALUE,$DUPL_VERSION_RC,$DUPL_VERSION_SUFFIX,"
-}
+  # nothing to do, just print
+  var_isset DUPL_VERSION && return
+  
+  local DUPL_VERSION_OUT DUPL_VERSION_AWK PYTHON_BIN CMD='duplicity'
+  # only run with a user specific python if configured (running by default
+  # breaks homebrew as they place a shell wrapper for duplicity in path)
+  PYTHON_BIN="$(python_binary)" &&\
+    CMD="$(qw "$PYTHON_BIN") $(which $CMD)"
+  CMD="$CMD --version 2>&1"
+  DUPL_VERSION_OUT=$(eval "$CMD")
+  DUPL_VERSION=`echo $DUPL_VERSION_OUT | awk '/^duplicity /{print $2; exit;}'`
+  #DUPL_VERSION='0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
+  DUPL_VERSION_VALUE=0
+  DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
+  if (match(v,/[^\.0-9]+[0-9]*$/)){
+    rest=substr(v,RSTART,RLENGTH);v=substr(v,0,RSTART-1);}
+  if (pos=match(rest,/RC([0-9]+)$/)) rc=substr(rest,pos+2)
+  split(v,f,"[. ]"); if(f[1]f[2]f[3]~/^[0-9]+$/) vvalue=f[1]*10000+f[2]*100+f[3]; else vvalue=0
+  print "#"v"_"rest"("rc"):"f[1]"-"f[2]"-"f[3]
+  print "DUPL_VERSION_VALUE=\047"vvalue"\047"
+  print "DUPL_VERSION_RC=\047"rc"\047"
+  print "DUPL_VERSION_SUFFIX=\047"rest"\047"
+  }')
+  eval "$DUPL_VERSION_AWK"
+  #echo -e ",$DUPL_VERSION,$DUPL_VERSION_VALUE,$DUPL_VERSION_RC,$DUPL_VERSION_SUFFIX,"
 
-function duplicity_version_check {
-	if [ $DUPL_VERSION_VALUE -eq 0 ]; then
-		inform "duplicity version check failed (please report, this is a bug)" 
-	elif [ $DUPL_VERSION_VALUE -le 404 ] && [ ${DUPL_VERSION_RC:-4} -lt 4 ]; then
-		error "The installed version $DUPL_VERSION is incompatible with $ME_NAME v$ME_VERSION.
+  # doublecheck findings and report error
+  if [ $DUPL_VERSION_VALUE -eq 0 ]; then
+    inform "duplicity version check failed (please report, this is a bug)
+the command
+  $CMD
+resulted in
+  $DUPL_VERSION_OUT
+"
+  elif [ $DUPL_VERSION_VALUE -le 404 ] && [ ${DUPL_VERSION_RC:-4} -lt 4 ]; then
+    error "The installed version $DUPL_VERSION is incompatible with $ME_NAME v$ME_VERSION.
 You should upgrade your version of duplicity to at least v0.4.4RC4 or
 use the older ftplicity version 1.1.1 from $ME_WEBSITE."
-	fi
+  fi
 }
 
 function duplicity_version_ge {
@@ -1103,6 +1140,21 @@ function duplicity_version_ge {
 
 function duplicity_version_lt {
   ! duplicity_version_ge "$1"
+}
+
+# parse interpreter from duplicity shebang
+function duplicity_python_binary_parse {
+  # cached result
+  ( var_isset 'PYTHON' || var_isset 'DUPL_PYTHON_BIN' ) && return
+
+  # parse it or warn
+  local DUPL_BIN=$(which duplicity)
+  DUPL_PYTHON_BIN=$(awk 'NR==1&&/^#!/{sub(/^#!( *\/usr\/bin\/env *)?/,""); print}' < "$DUPL_BIN")
+  if ! echo "$DUPL_PYTHON_BIN" | grep -q -i 'python'; then
+    warning "Could not parse the python interpreter used from duplicity ($DUPL_BIN). Result was '$DUPL_PYTHON_BIN'.
+Will assume it is '$DEFAULT_PYTHON'."
+    DUPL_PYTHON_BIN="$DEFAULT_PYTHON"
+  fi
 }
 
 function run_script { # run pre/post scripts
@@ -1156,7 +1208,7 @@ function qw { quotewrap "$@"; }
 function quotewrap {
   local param="$@"
   # quote strings having non word chars (e.g. spaces)
-  if echo "$param"  | awk '/[^A-Za-z0-9_\.\-]/{exit 0}{exit 1}'; then
+  if echo "$param"  | awk '/[^A-Za-z0-9_\.\-\/]/{exit 0}{exit 1}'; then
     echo "$param" | awk '{\
       gsub(/[\047]/,"\047\\\047\047",$0);\
       gsub(/[\042]/,"\047\\\042\047",$0);\
@@ -1208,18 +1260,40 @@ DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR' \
  ${DUPL_ARG_ENC}"
 }
 
-
 # function to filter the DUPL_PARAMS var from user conf
 function duplicity_params_conf {
   # reuse cmd var from main loop
   ## in/exclude parameters are currently not supported on restores
   if [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ] || [ "$cmd" = "status" ]; then
-    # filter exclude params from fetch/restore
-    echo "$DUPL_PARAMS" | awk '{gsub(/--(ex|in)clude[a-z-]*(([ \t]+|=)[^-][^ \t]+)?/,"");print}'
+    # filter exclude params from fetch/restore/status
+    eval "stripXcludes $DUPL_PARAMS"
     return
   fi
-  
+
+  # nothing done, print unchanged
   echo "$DUPL_PARAMS"
+}
+
+# strip in/exclude parameters from param string
+function stripXcludes {
+  local STRIPNEXT OUT;
+  for p in "$@"; do
+    if [ -n "$STRIPNEXT" ]; then
+      unset STRIPNEXT
+      # strip the value of previous parameter
+      continue
+    elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z]+)?$/{exit 0;}{exit 1;}'; then
+      # strips eg. --include /foo/bar
+      STRIPNEXT="yes"
+      continue
+    elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z]+)?=/{exit 0;}{exit 1;}'; then
+      # strips eg. --include=/foo/bar
+      continue
+    fi
+    
+    OUT="$OUT $(qw "$p")"
+  done
+  echo "$OUT"
 }
 
 function duplify { # the actual wrapper function
@@ -1242,18 +1316,18 @@ function duplify { # the actual wrapper function
   # init global duplicity parameters same for all tasks
   duplicity_params_global
 
-  local RUN=eval BIN=duplicity DUPL_BIN
+  local RUN=eval BIN=duplicity DUPL_BIN PYTHON_BIN
   # run in cmd line preview mode if requested
   var_isset 'PREVIEW' && RUN=echo
   # try to resolve duplicity path for usage with python interpreter
   DUPL_BIN=$(which "$BIN") || DUPL_BIN="$BIN"
   # only run with a user specific python if configured (running by default
   # breaks homebrew as they place a shell wrapper for duplicity in path)
-  [ -n "$PYTHON" ] && [ "$PYTHON" != "$DEFAULT_PYTHON" ] &&\
-    BIN="$(qw "$(python_binary)") $(qw "$DUPL_BIN")"
+  PYTHON_BIN="$(python_binary)" &&\
+    BIN="$(qw "$PYTHON_BIN") $(qw "$DUPL_BIN")"
 
-$RUN "${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS} \
-${DUPL_PRECMD} $BIN $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
+$RUN "${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS}\
+ ${DUPL_PRECMD} $BIN $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
  $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS"
 
   local ERR=$?
@@ -1653,7 +1727,7 @@ function gpg_avail {
   lookup "$(gpg_binary)"
 }
 
-# enforce the use our selected gpg binary
+# enforce the use of our selected gpg binary
 function gpg {
   command "$(gpg_binary)" "$@"
 }
@@ -1710,7 +1784,7 @@ Hint:
     exit 0
     ;;
   version|-version|--version|-v|-V)
-    # profile can override GPG, so import it if it was given
+    # profile can override GPG/PYTHON, so import it if it was given
     var_isset FTPLCFG && {
       set_config
       [ -r "$CONF" ] && . "$CONF" || warning "Cannot import config '$CONF'."
@@ -1742,8 +1816,8 @@ echo "Start $ME v$ME_VERSION, time is $(date_fix '%F %T')."
 # is duplicity avail
 lookup duplicity || error_path "duplicity missing. installed und available in path?"
 # init, exec duplicity version check info
+duplicity_python_binary_parse
 duplicity_version_get
-duplicity_version_check
 
 # check for certain important helper programs
 for f in awk grep "$(python_binary)"; do
