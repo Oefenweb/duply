@@ -9,11 +9,11 @@
 #  changed from ftplicity to duply.                                            #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.    #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany            #
-#  (c) 2008-2018 Edgar Soldin (changes since version 1.3)                      #
+#  (c) 2008-2019 Edgar Soldin (changes since version 1.3)                      #
 ################################################################################
 #  LICENSE:                                                                    #
 #  This program is licensed under GPLv2.                                       #
-#  Please read the accompanying license information in gpl.txt.                #
+#  Please read the accompanying license information in gpl-2.0.txt.            #
 ################################################################################
 #  TODO/IDEAS/KNOWN PROBLEMS:
 #  - possibility to restore time frames (incl. deleted files)
@@ -33,6 +33,12 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.2 (30.12.2018)
+#  - featreq 44: implement grouping for batch commands
+#      new separators are [] (square brackets) or groupIn/groupOut
+#      command 'backup' translates now to [pre_bkp_post] to be skipped as
+#      one block in case a condition was set in the batch instruction
+#
 #  2.1 (23.07.2018)
 #  - be more verbose when duplicity version detection fails
 #  - using info shows python binary's path for easier identification now
@@ -505,7 +511,7 @@ function python_binary {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.1"
+ME_VERSION="2.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -660,16 +666,21 @@ SEPARATORS:
   - (minus sign), _or_  
              conditional OR
              the next command will only be executed if the previous failed
+  [] (square brackets), _groupIn_/_groupOut_  
+             enables grouping of commands
 
    example:  
-    'pre+bkp-verify_post' translates to 'pre_and_bkp_or_verify_post'
+    'pre+[bkp-verify]_post' translates to
+    'pre_and_groupIn_bkp_or_verify_groupOut_post'
 
 COMMANDS:
   usage      get usage help text
 
-  and/or     pseudo commands for better batch cmd readability (see SEPARATORS)
+  and/or/groupIn/groupOut  
+             pseudo commands used in batches (see SEPARATORS above)
+
   create     creates a configuration profile
-  backup     backup with pre/post script execution (batch: pre_bkp_post),
+  backup     backup with pre/post script execution (batch: [pre_bkp_post]),
               full (if full_if_older matches or no earlier backup is found)
               incremental (in all other cases)
   pre/post   execute '<profile>/$(basename "$PRE")', '<profile>/$(basename "$POST")' scripts
@@ -730,8 +741,9 @@ PRE/POST SCRIPTS:
   Some useful internal duply variables are exported to the scripts.
 
     PROFILE, CONFDIR, SOURCE, TARGET_URL_<PROT|HOSTPATH|USER|PASS>, 
-    GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_<PREV|NEXT>, CMD_ERR, RUN_START,
-    CND_<PREV|NEXT> (condition before/after next/prev command)
+    GPG_<KEYS_ENC|KEY_SIGN|PW>, CMD_ERR, RUN_START,
+    CMD_<PREV|NEXT> (previous/next command), 
+    CND_<PREV|NEXT> (condition before/after)
 
   The CMD_* variables were introduced to allow different actions according to 
   the command the scripts were attached to e.g. 'pre_bkp_post_pre_verify_post' 
@@ -1416,8 +1428,18 @@ function var_isset {
 }
 
 function is_condition {
-  local CMD=$(tolower "$@")
+  local CMD=$(tolower "$1")
   [ "$CMD" == 'and' ] || [ "$CMD" == 'or' ]
+}
+
+function is_groupMarker {
+  local CMD=$(tolower "$1")
+  [ "$CMD" == 'groupin' ] || [ "$CMD" == 'groupout' ]
+}
+
+function is_command {
+  local CMD=$(tolower "$1")
+  ! is_condition "$CMD" && ! is_groupMarker "$CMD"
 }
 
 function url_encode {
@@ -1894,9 +1916,6 @@ eval "${TARGET_SPLIT_URL}"
 # Hint: cmds is also used to check if authentification info sufficient in the next step 
 cmds="$2"; shift 2
 
-# translate backup to batch command 
-cmds=${cmds//backup/pre_bkp_post}
-
 # complain if command(s) missing
 [ -z $cmds ] && error "  No command given.
 
@@ -2277,9 +2296,18 @@ EXCLUDE="$EXCLUDE"
 # since 0.7.03 --exclude-globbing-filelist is deprecated
 EXCLUDE_PARAM="--exclude$(duplicity_version_lt 703 && echo -globbing)-filelist" 
 
-# replace magic separators to condition command equivalents (+=and,-=or)
-cmds=$(awk -v cmds="$cmds" "BEGIN{ gsub(/\+/,\"_and_\",cmds); gsub(/\-/,\"_or_\",cmds); print cmds}")
+# translate backup to batch command 
+cmds=${cmds//backup/groupIn_pre_bkp_post_groupOut}
+
+# replace magic separators to command equivalents (+=and,-=or,[=groupIn,]=groupOut)
+cmds=$(awk -v cmds="$cmds" "BEGIN{ \
+  gsub(/\+/,\"_and_\",cmds);\
+  gsub(/\-/,\"_or_\",cmds);\
+  gsub(/\[/,\"_groupIn_\",cmds);\
+  gsub(/\]/,\"_groupOut_\",cmds);\
+  print cmds}")
 # convert cmds to array, lowercase for safety
+declare -a CMDS
 CMDS=( $(awk "BEGIN{ cmds=tolower(\"$cmds\"); gsub(/_/,\" \",cmds); print cmds }") )
 
 unset FTPL_ERR
@@ -2292,60 +2320,108 @@ do
 # raise index in cmd array for pre/post param
 var_isset 'CMD_NO' && CMD_NO=$((++CMD_NO)) || CMD_NO=0
 
-# deal with condition "commands"
+unset CMD_VALUE CMD_NEXT CMD_PREV CND_NEXT CND_PREV
+
+# get next cmd,cnd vars
+nextno=$(( $CMD_NO ))
+while ! var_isset 'CMD_NEXT'
+do
+  nextno=$(($nextno+1))
+  if [ "$nextno" -lt "${#CMDS[@]}" ]; then
+    CMD_VALUE=${CMDS[$nextno]}
+    is_condition "$CMD_VALUE" && CND_NEXT="$CMD_VALUE" && continue
+    is_groupMarker "$CMD_VALUE" && continue
+    CMD_NEXT="$CMD_VALUE"
+  else
+    CMD_NEXT='END'
+  fi
+done
+
+# get prev cnd, cnds are skipped pseudocmds
+prevno=$(( $CMD_NO ));
+while ! var_isset 'CND_PREV'
+do
+  prevno=$(($prevno-1))
+  if [ "$prevno" -ge 0 ]; then
+    CMD_VALUE=${CMDS[$prevno]}
+    is_condition "$CMD_VALUE" && CND_PREV="$CMD_VALUE" && break
+    is_command "$CMD_VALUE" && break
+  else
+    break
+  fi
+done
+
+# get prev cmd command minus skipped commands, only executed
+prevno=$(( $CMD_NO - ${CMD_SKIPPED-0} ));
+while ! var_isset 'CMD_PREV'
+do
+  prevno=$(($prevno-1))
+  if [ "$prevno" -ge 0 ]; then
+    CMD_VALUE=${CMDS[$prevno]}
+    is_condition "$CMD_VALUE" && CND_PREV="$CMD_VALUE" && continue
+    is_groupMarker "$CMD_VALUE" && continue
+    CMD_PREV="$CMD_VALUE"
+  else
+    CMD_PREV='START'
+  fi
+done
+
+function get_cmd_skip_count {
+  # find closing bracket, get group skip count
+  local nextno=$CMD_NO
+  local GRP_OPEN=0
+  local GRP_SKIP=0
+  local CMD_VALUE
+  while [ "$nextno" -lt "${#CMDS[@]}" ]
+  do
+    nextno=$(($nextno+1))
+    CMD_VALUE=${CMDS[$nextno]}
+    GRP_SKIP=$(( ${GRP_SKIP} + 1 ));
+    if is_command "$CMD_VALUE" && [ "$GRP_OPEN" -lt 1 ]; then
+        break;
+    elif [ "$CMD_VALUE" == 'groupin' ]; then
+      GRP_OPEN=$(( ${GRP_OPEN} + 1 ))
+    elif [ "$CMD_VALUE" == 'groupout' ]; then
+      GRP_OPEN=$(( ${GRP_OPEN} - 1 ))
+      if [ "$GRP_OPEN" -lt 1 ]; then
+        break;
+      fi
+    fi
+  done
+
+  echo $GRP_SKIP;
+}
+
+# decision time: are we skipping already or dealing with condition "commands" or other non-cmds?
 unset SKIP_NOW
 if var_isset 'CMD_SKIP' && [ $CMD_SKIP -gt 0 ]; then
-  echo -e "\n--- Skipping command $(toupper $cmd) ! ---"
+  # skip cnd/grp cmds silently
+  is_command "$cmd" && echo -e "\n--- Skipping command $(toupper $cmd) ! ---"
   CMD_SKIP=$(($CMD_SKIP - 1))
   SKIP_NOW="yes"
-elif [ "$cmd" == 'and' ] && [ "$CMD_ERR" -ne "0" ]; then
-  CMD_SKIP=1
+elif ! var_isset 'PREVIEW' && [ "$cmd" == 'and' ] && [ "$CMD_ERR" -ne "0" ]; then
+  CMD_SKIP=$(get_cmd_skip_count)
+  # incl. this "cmd"
+  CMD_SKIP=$(( $CMD_SKIP + 1 ))
+  unset CMD_SKIPPED
   SKIP_NOW="yes"
-elif [ "$cmd" == 'or' ] && [ "$CMD_ERR" -eq "0" ]; then
-  CMD_SKIP=1
+elif ! var_isset 'PREVIEW' && [ "$cmd" == 'or' ] && [ "$CMD_ERR" -eq "0" ]; then
+  CMD_SKIP=$(get_cmd_skip_count)
+  # incl. this "cmd"
+  CMD_SKIP=$(( $CMD_SKIP + 1 ))
+  unset CMD_SKIPPED
   SKIP_NOW="yes"
-elif [ "$cmd" == 'and' ] || [ "$cmd" == 'or' ]; then
+elif is_condition "$cmd" || is_groupMarker "$cmd"; then
   unset 'CMD_SKIP';
   SKIP_NOW="yes"
 fi
 
-# sum up how many commands we skip and actually skip
+# let's do the skip now
 if [ -n "$SKIP_NOW" ]; then
+  # sum up how many commands we actually skipped for the prev var routines
   CMD_SKIPPED=$((${CMD_SKIPPED-0} + 1))
   continue
 fi
-
-unset CMD_VALUE CMD_NEXT CMD_PREV CND_NEXT CND_PREV
-
-# get next cmd,cnd vars
-nextno=$(( $CMD_NO + 1 ))
-while ! var_isset 'CMD_NEXT'
-do
-  if [ "$nextno" -lt "${#CMDS[@]}" ]; then
-    CMD_VALUE=${CMDS[$nextno]}
-    is_condition "$CMD_VALUE" && CND_NEXT="$CMD_VALUE" || CMD_NEXT="$CMD_VALUE"
-  else
-    CMD_NEXT='END'
-  fi
-  nextno=$(($nextno+1))
-done
-
-# get prev cnd, cnd are skipped pseudocmds
-prevno=$(( $CMD_NO - 1 ))
-[ "$prevno" -ge 0 ] && is_condition "${CMDS[$prevno]}" && CND_PREV=${CMDS[$prevno]}
-
-# get prev cmd command minus skipped commands, only executed
-prevno=$(( $CMD_NO - ${CMD_SKIPPED-0} - 1 )); unset CMD_SKIPPED
-while ! var_isset 'CMD_PREV'
-do
-  if [ "$prevno" -ge 0 ]; then
-    CMD_VALUE=${CMDS[$prevno]}
-    is_condition "$CMD_VALUE" || CMD_PREV="$CMD_VALUE"
-  else
-    CMD_PREV='START'
-  fi
-  prevno=$(($prevno-1))
-done
 
 # save start time
 RUN_START=$(nsecs)
