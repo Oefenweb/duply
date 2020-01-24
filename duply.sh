@@ -27,12 +27,17 @@
 #    deprecation since 0.5.10 namely --time-separator
 #                               --short-filenames
 #                              --old-filenames
-#  - add 'exclude_<command>' list usage eg. exclude_verify
+#  - add 'exclude_<command>' list usage e.g. exclude_verify
 #  - featreq 25: a download/install duplicity option
 #  - hint on install software if a piece is missing
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.2.1 (22.01.2020)
+#  - featreq 46: Example systemd units & Howto, courtesy of Jozef Riha
+#  - featreq 47: Clarify message about keeping the profile, also by Jozef Riha
+#  - fix abbreviation spelling of 'e.g.'
+#
 #  2.2 (30.12.2018)
 #  - featreq 44: implement grouping for batch commands
 #      new separators are [] (square brackets) or groupIn/groupOut
@@ -46,7 +51,7 @@
 #      configured per PYTHON var
 #      unconfigured, parsed from duplicity shebang
 #      or set to current duplicity default 'python2' (was 'python' until now)
-#  - do not quotewrap strings because of slashes (eg. paths) anymore
+#  - do not quotewrap strings because of slashes (e.g. paths) anymore
 #  - bugfix: improved in/exclude stripping from conf DUPL_PARAMS
 #
 #  2.0.4 (20.02.2018)
@@ -105,7 +110,7 @@
 #    path /usr/bin/python until 0.7.05, which we circumvent this way)
 #  - featreq 36: support gpg-connect-agent as a means to detect if an agent is 
 #    running (thx Thomas Harning Jr.), used gpg-agent for detection though
-#  - quotewrapped run_cmd parameters to protect it from spaces eg. in TMP path
+#  - quotewrapped run_cmd parameters to protect it from spaces e.g. in TMP path
 #  - key export routine respects gpg-agent usage now
 #
 #  1.10.1 (19.8.2015)
@@ -511,7 +516,7 @@ function python_binary {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.2"
+ME_VERSION="2.2.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -612,7 +617,7 @@ DESCRIPTION:
   It simplifies running duplicity with cron or on command line by:
 
     - keeping recurring settings in profiles per backup job
-    - enabling batch operations eg. backup_verify+purge
+    - enabling batch operations e.g. backup_verify+purge
     - executing pre/post scripts (different actions possible 
       depending on previous or next command or it's exit status)
     - precondition checking for flawless duplicity operation
@@ -852,7 +857,7 @@ GPG_PW='${DEFAULT_GPG_PW}'
 # backend, credentials & location of the backup target (URL-Format)
 # generic syntax is
 #   scheme://[user[:password]@]host[:port]/[/]path
-# eg.
+# e.g.
 #   sftp://bob:secret@backupserver.com//home/bob/dupbkp
 # for details and available backends see duplicity manpage, section URL Format
 #   http://duplicity.nongnu.org/duplicity.1.html#sect7
@@ -875,7 +880,7 @@ TARGET='${DEFAULT_TARGET}'
 #   env vars should be set.
 #TARGET_USER='${DEFAULT_TARGET_USER}'
 #TARGET_PASS='${DEFAULT_TARGET_PASS}'
-# eg. for cloud files backend it might look like this (uncomment for use!)
+# e.g. for cloud files backend it might look like this (uncomment for use!)
 #export CLOUDFILES_USERNAME='someuser'
 #export CLOUDFILES_APIKEY='somekey'
 #export CLOUDFILES_AUTHURL ='someurl'
@@ -1007,12 +1012,23 @@ function hint_profile {
   cat <<EOF
 IMPORTANT:
   Copy the _whole_ profile folder after the first backup to a safe place.
-  It contains everything needed to restore your backups. You will need 
-  it if you have to restore the backup from another system (e.g. after a 
-  system crash). Keep access to these files restricted as they contain 
-  _all_ informations (gpg data, ftp data) to access and modify your backups.
+  It contains everything (duply related) needed to restore your backups. 
 
-  Repeat this step after _all_ configuration changes. Some configuration 
+  Pay attention to (possibly later added) external files such as credentials
+  or auth files (e.g. netrc, .megarc, ssh keys) or environment variables
+  (e.g. DPBX_ACCESS_TOKEN). 
+  It is good policy to place those in the profile folder if possible at all.
+    e.g. in case of 'multi://' target the config .json file
+  Env vars should be added to duply profiles' conf file.
+
+  Keep access to these files restricted as they contain information (gpg key,
+  passphrases etc.) to access and modify your backups.
+  
+  Finally:
+  You should attempt a restore from an unrelated host to be sure you really
+  have everything needed for restoration.
+
+  Repeat these steps after _all_ configuration changes. Some configuration 
   options are crucial for restoration.
 
 EOF
@@ -1295,11 +1311,11 @@ function stripXcludes {
       # strip the value of previous parameter
       continue
     elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z]+)?$/{exit 0;}{exit 1;}'; then
-      # strips eg. --include /foo/bar
+      # strips e.g. --include /foo/bar
       STRIPNEXT="yes"
       continue
     elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z]+)?=/{exit 0;}{exit 1;}'; then
-      # strips eg. --include=/foo/bar
+      # strips e.g. --include=/foo/bar
       continue
     fi
     
@@ -1394,7 +1410,7 @@ function nsecs {
 		[ -n "$NSECS" ] && NSECS_DISABLED=0 || NSECS_DISABLED=1
 	fi
 
-	# add 9 digits, not all date(s) deliver nsecs eg. busybox date
+	# add 9 digits, not all date(s) deliver nsecs e.g. busybox date
 	if [ "$NSECS_DISABLED" == "1" ]; then
 		date_fix %s000000000
 	else
@@ -1940,7 +1956,7 @@ for param in "$@"; do
         # forward parameter[/option pairs] to duplicity
         dupl_opts["${#dupl_opts[@]}"]=${param}
       else
-        # anything else must be a parameter (eg. for fetch, ...)
+        # anything else must be a parameter (e.g. for fetch, ...)
         ftpl_pars["${#ftpl_pars[@]}"]=${param}
       fi
       last_param=${param}
