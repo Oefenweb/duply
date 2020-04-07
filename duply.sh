@@ -33,6 +33,10 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.2.2 (24.02.2020)
+#  - bugfix 120: Failures in "Autoset trust of key" during restore 
+#    because of gpg2.2 fingerprint output change
+#
 #  2.2.1 (22.01.2020)
 #  - featreq 46: Example systemd units & Howto, courtesy of Jozef Riha
 #  - featreq 47: Clarify message about keeping the profile, also by Jozef Riha
@@ -516,7 +520,7 @@ function python_binary {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.2.1"
+ME_VERSION="2.2.2"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -1583,9 +1587,8 @@ Exit the edit mode of gpg with \"quit\"."
 
 # see 'How to specify a user ID' on gpg manpage
 function gpg_fingerprint {
-  local PRINT=$(gpg $GPG_OPTS --fingerprint "$1" 2>&1|awk -F= 'NR==2{gsub(/ /,"",$2);$2=toupper($2); if ( $2 ~ /^[A-F0-9]+$/ && length($2) == 40 ) print $2; else exit 1}') \
-    && [ -n "$PRINT" ] && echo $PRINT && return 0
-  return 1
+  gpg $GPG_OPTS --fingerprint "$1" 2>&1 | \
+  awk 'NR==2{sub(/^.*=/,"");gsub(/[ \t]/,""); if ( $0 !~ /^[A-F0-9]+$/ || length($0) != 40 ) exit 1; print}'
 }
 
 function gpg_export_if_needed {
