@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                            #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.    #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany            #
-#  (c) 2008-2019 Edgar Soldin (changes since version 1.3)                      #
+#  (c) 2008-2020 Edgar Soldin (changes since version 1.3)                      #
 ################################################################################
 #  LICENSE:                                                                    #
 #  This program is licensed under GPLv2.                                       #
@@ -33,6 +33,16 @@
 #  - import/export profile from/to .tgz function !!!
 #
 #  CHANGELOG:
+#  2.3.1 (11.2.2021)
+#  - bugfix 123: symmetric encryption errs out, asks for '' private key
+#
+#  2.3 (30.12.2020)
+#  - don't import whole key pair anymore if only pub/sec is requested
+#  - gpg import routine informs on missing key files in profile now
+#  - add check/import needed secret key for decryption
+#  - featreq 50: Disable GPG key backups, implemented/added settings
+#      GPG_IMPORT/GPG_EXPORT='disabled' to conf template
+#
 #  2.2.2 (24.02.2020)
 #  - bugfix 120: Failures in "Autoset trust of key" during restore 
 #    because of gpg2.2 fingerprint output change
@@ -520,7 +530,7 @@ function python_binary {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.2.2"
+ME_VERSION="2.3.1"
 ME_WEBSITE="http://duply.net"
 
 # default config values
@@ -857,6 +867,10 @@ GPG_PW='${DEFAULT_GPG_PW}'
 
 # disable preliminary tests with the following setting
 #GPG_TEST='disabled'
+# disable automatic gpg key importing altogether
+#GPG_IMPORT='disabled'
+# disable automatic gpg key exporting to profile folder
+#GPG_EXPORT='disabled'
 
 # backend, credentials & location of the backup target (URL-Format)
 # generic syntax is
@@ -1080,23 +1094,13 @@ Hint${hint:+s}:
   Don't forget the used _password_ as you will need it.
   When done enter the 8 digit id & the password in the profile conf file.
 
-  The key id can be found doing a 'gpg --list-keys'. In the  example output 
-  below the key id would be FFFFFFFF for the public key.
+  The key id can be found doing a 'gpg --list-keys'. In the example output 
+  below the key id for the public key would be FFFFFFFF.
 
   pub   1024D/FFFFFFFF 2007-12-17
   uid                  duplicity
   sub   2048g/899FE27F 2007-12-17
 "
-}
-
-function error_gpg_key {
-  local KEY_ID="$1"
-  local KIND="$2"
-  error_gpg "${KIND} gpg key '${KEY_ID}' cannot be found." \
-"Doublecheck if the above key is listed by 'gpg --list-keys' or available 
-  as gpg key file '$(basename "$(gpg_keyfile "${KEY_ID}")")' in the profile folder.
-  If not you can put it there and $ME_NAME will autoimport it on the next run.
-  Alternatively import it manually as the user you plan to run $ME_NAME with."
 }
 
 function error_gpg_test {
@@ -1525,8 +1529,16 @@ function join {
   echo $OUT
 }
 
+function gpg_testing {
+  [ "$GPG_TEST" != "disabled" ]
+}
+
 function gpg_signing {
   echo ${GPG_KEY_SIGN} | grep -v -q -e '^disabled$'
+}
+
+function gpg_keytype {
+  echo "$1" | awk '/^PUB$/{print "public"}/^SEC$/{print "secret"}'
 }
 
 # parameter key id, key_type
@@ -1539,10 +1551,15 @@ function gpg_keyfile {
 # parameter key id
 function gpg_import {
   local i FILE FOUND=0 KEY_ID="$1" KEY_TYPE="$2" KEY_FP="" ERR=0
+  [ "$GPG_IMPORT" = "disabled" ] && {
+    echo "Skipping import of needed $(gpg_keytype "$KEY_TYPE") key '$KEY_ID'. (GPG_IMPORT='disabled')"
+    return
+  }
+
   # create a list of legacy key file names and current naming scheme
   # we always import pub and sec if they are avail in conf folder
   local KEYFILES=( "$CONFDIR/gpgkey" $(gpg_keyfile "$KEY_ID") \
-                   $(gpg_keyfile "$KEY_ID" PUB) $(gpg_keyfile "$KEY_ID" SEC))
+                   $(gpg_keyfile "$KEY_ID" "$KEY_TYPE") )
 
   # Try autoimport from existing old gpgkey files 
   # and new gpgkey.XXX.asc files (since v1.4.2)
@@ -1564,7 +1581,8 @@ function gpg_import {
   done
 
   if [ "$FOUND" -eq 0 ]; then
-    warning "No keyfile for '$KEY_ID' found in profile\n'$CONFDIR'."
+    echo "Notice: No keyfile for '$KEY_ID' found in profile folder."
+    return 1
   fi
 
   # try to set trust automagically
@@ -1592,6 +1610,11 @@ function gpg_fingerprint {
 }
 
 function gpg_export_if_needed {
+  [ "$GPG_EXPORT" = 'disabled' ] && { \
+    echo "Skipping export of gpg keys. (GPG_EXPORT='disabled')"
+    return
+  }
+
   local SUCCESS FILE KEY_TYPE
   local TMPFILE="$TEMP_DIR/${ME_NAME}.$$.$(date_fix %s).gpgexp"
   for KEY_ID in "$@"; do
@@ -1599,8 +1622,9 @@ function gpg_export_if_needed {
     for KEY_TYPE in PUB SEC; do
       FILE="$(gpg_keyfile "$KEY_ID" $KEY_TYPE)"
       if [ ! -f "$FILE" ] && eval gpg_$(tolower $KEY_TYPE)_avail \"$KEY_ID\"; then
+
         # exporting
-        CMD_MSG="Backup $KEY_TYPE key '$KEY_ID' to profile."
+        CMD_MSG="Backup $(gpg_keytype "$KEY_TYPE") key '$KEY_ID' to profile."
         # gpg2.1 insists on passphrase here, gpg2.0- happily exports w/o it
         # we pipe an empty string when GPG_PW is not set to avoid gpg silently waiting for input
         run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $GPG_OPTS $GPG_USEAGENT $(gpg_param_passwd GPG_PW_SIGN GPG_PW) --armor --export"$(test "SEC" = "$KEY_TYPE" && echo -secret-keys)" $(qw "$KEY_ID") '>>' $(qw "$TMPFILE")
@@ -1695,6 +1719,9 @@ function gpg_passwd {
 
 # return success if at least one secret key is available
 function gpg_key_decryptable {
+  # no keys, no problem
+  gpg_symmetric && return 0
+
   local KEY_ID
   for KEY_ID in "${GPG_KEYS_ENC_ARRAY[@]}"; do
     gpg_sec_avail "$KEY_ID" && return 0
@@ -1715,7 +1742,7 @@ function gpg_param_passwd {
   fi
 }
 
-# select the earlist defined and create an "echo <value> |" string
+# select the earliest defined and create an "echo <value> |" string
 function gpg_pass_pipein {
   var_isset GPG_USEAGENT && exit 1
   
@@ -2059,17 +2086,49 @@ Tip: Separate signing keys may have empty passwords e.g. GPG_PW_SIGN=''.
 Tip2: Use gpg-agent."
 fi
 
-# check gpg encr public keys availability
+# test - GPG KEY AVAILABILITY ##################################################
+
+# check gpg public keys availability, try import if needed
 for (( i = 0 ; i < ${#GPG_KEYS_ENC_ARRAY[@]} ; i++ )); do
   KEY_ID="${GPG_KEYS_ENC_ARRAY[$i]}"
   # test availability, try to import, retest
   if ! gpg_pub_avail "${KEY_ID}"; then
-    echo "Encryption public key '${KEY_ID}' not found."
+    echo "Encryption public key '${KEY_ID}' not in keychain. Try to import from profile."
     gpg_import "${KEY_ID}" PUB
     gpg_key_cache RESET "${KEY_ID}"
-    gpg_pub_avail "${KEY_ID}" || error_gpg_key "${KEY_ID}" "Public"
+    gpg_pub_avail "${KEY_ID}" || { \
+      gpg_testing && error_gpg \
+      "Needed public gpg key '${KEY_ID}' is not available in keychain." \
+      "Doublecheck if the above key is listed by 'gpg --list-keys' or available
+  as gpg key file '$(basename "$(gpg_keyfile "${KEY_ID}")")' in the profile folder.
+  If not you can put it there and $ME_NAME will autoimport it on the next run.
+  Alternatively import it manually as the user you plan to run $ME_NAME with."
+    }
+  else
+    echo "Public key '${KEY_ID}' found in keychain."
   fi
 done
+
+# check gpg encr secret encryption keys availability and fail
+# if none is available after a round of importing trials
+gpg_key_decryptable || \
+{
+  echo "Missing secret keys for decryption in keychain."
+  for (( i = 0 ; i < ${#GPG_KEYS_ENC_ARRAY[@]} ; i++ )); do
+    KEY_ID="${GPG_KEYS_ENC_ARRAY[$i]}"
+    # test availability, try to import, retest
+    if ! gpg_sec_avail "${KEY_ID}"; then
+    echo "Try to import secret key '${KEY_ID}' from profile."
+      gpg_import "${KEY_ID}" SEC
+      gpg_key_cache RESET "${KEY_ID}"
+    fi
+  done
+  gpg_key_decryptable || \
+  {
+    gpg_testing && error_gpg_test "None of the configured keys '$(join "','" "${GPG_KEYS_ENC_ARRAY[@]}")' \
+has a secret key in the keychain. Decryption will be impossible!"
+  }
+}
 
 # gpg secret sign key availability
 # if none set, autoset first encryption key as sign key
@@ -2086,6 +2145,7 @@ elif ! var_isset 'GPG_KEY_SIGN'; then
     if gpg_sec_avail "${KEY_ID}"; then
       GPG_KEY_SIGN="${KEY_ID}"
     else
+      echo "Signing secret key '${KEY_ID}' not found."
       gpg_import "${KEY_ID}" SEC
       gpg_key_cache RESET "${KEY_ID}"
       if gpg_sec_avail "${KEY_ID}"; then
@@ -2157,15 +2217,15 @@ echo $@ $DUPL_PARAMS | grep -q -e '--asynchronous-upload' && FACTOR=2 || FACTOR=
 # test - GPG SANITY #####################################################################
 # if encryption is disabled, skip this whole section
 if gpg_disabled; then
-  echo -e "Test - En/Decryption skipped. (GPG disabled)"
-elif [ "$GPG_TEST" = "disabled" ]; then 
-  echo -e "Test - En/Decryption skipped. (Testing disabled)"
+  echo -e "Test - En/Decryption skipped. (GPG='disabled')"
+elif ! gpg_testing; then 
+  echo -e "Test - En/Decryption skipped. (GPG_TEST='disabled')"
 else
 
-GPG_TEST="$TEMP_DIR/${ME_NAME}.$$.$(date_fix %s)"
+GPG_TEST_PREFIX="$TEMP_DIR/${ME_NAME}.$$.$(date_fix %s)"
 function cleanup_gpgtest { 
-  echo -en "Cleanup - Delete '${GPG_TEST}_*'"
-  rm "${GPG_TEST}"_* 2>/dev/null && echo "(OK)" || echo "(FAILED)"
+  echo -en "Cleanup - Delete '${GPG_TEST_PREFIX}_*'"
+  rm "${GPG_TEST_PREFIX}"_* 2>/dev/null && echo "(OK)" || echo "(FAILED)"
 }
 
 # signing enabled?
@@ -2182,7 +2242,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
   done
   # check encrypting
   CMD_MSG="Test - Encrypt to '$(join "','" "${GPG_KEYS_ENC_ARRAY[@]}")'${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o $(qw "${GPG_TEST}_ENC") -e $(qw "$ME_LONG")
+  run_cmd $(gpg_pass_pipein GPG_PW_SIGN GPG_PW) gpg $CMD_PARAM_SIGN $(gpg_param_passwd GPG_PW_SIGN GPG_PW) $CMD_PARAMS $GPG_USEAGENT --status-fd 1 $GPG_OPTS -o $(qw "${GPG_TEST_PREFIX}_ENC") -e $(qw "$ME_LONG")
   CMD_ERR=$?
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -2196,7 +2256,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
   # check decrypting
   CMD_MSG="Test - Decrypt"
   gpg_key_decryptable || CMD_DISABLED="No matching secret key available."
-  run_cmd $(gpg_pass_pipein GPG_PW) gpg $(gpg_param_passwd GPG_PW) $GPG_OPTS -o $(qw "${GPG_TEST}_DEC") $GPG_USEAGENT -d $(qw "${GPG_TEST}_ENC")
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $(gpg_param_passwd GPG_PW) $GPG_OPTS -o $(qw "${GPG_TEST_PREFIX}_DEC") $GPG_USEAGENT -d $(qw "${GPG_TEST_PREFIX}_ENC")
   CMD_ERR=$?
 
   if [ "$CMD_ERR" != "0" ]; then 
@@ -2207,7 +2267,7 @@ if [ ${#GPG_KEYS_ENC_ARRAY[@]} -gt 0 ]; then
 else
   # check encrypting
   CMD_MSG="Test - Encryption with passphrase${CMD_MSG_SIGN:+ & $CMD_MSG_SIGN}"
-  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o $(qw "${GPG_TEST}_ENC") --batch -c $(qw "$ME_LONG")
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS $CMD_PARAM_SIGN --passphrase-fd 0 -o $(qw "${GPG_TEST_PREFIX}_ENC") --batch -c $(qw "$ME_LONG")
   CMD_ERR=$?
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Encryption failed.${CMD_OUT:+\n$CMD_OUT}"
@@ -2215,7 +2275,7 @@ else
 
   # check decrypting
   CMD_MSG="Test - Decryption with passphrase"
-  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS --passphrase-fd 0 -o $(qw "${GPG_TEST}_DEC") --batch -d $(qw "${GPG_TEST}_ENC")
+  run_cmd $(gpg_pass_pipein GPG_PW) gpg $GPG_OPTS --passphrase-fd 0 -o $(qw "${GPG_TEST_PREFIX}_DEC") --batch -d $(qw "${GPG_TEST_PREFIX}_ENC")
   CMD_ERR=$?
   if [ "$CMD_ERR" != "0" ]; then 
     error_gpg_test "Decryption failed.${CMD_OUT:+\n$CMD_OUT}"
@@ -2224,8 +2284,8 @@ fi
 
 # compare original w/ decryptginal
 CMD_MSG="Test - Compare"
-[ -r "${GPG_TEST}_DEC" ] || CMD_DISABLED="File not found. Nothing to compare."
-run_cmd "test \"\$(cat '$ME_LONG')\" = \"\$(cat '${GPG_TEST}_DEC')\""
+[ -r "${GPG_TEST_PREFIX}_DEC" ] || CMD_DISABLED="File not found. Nothing to compare."
+run_cmd "test \"\$(cat '$ME_LONG')\" = \"\$(cat '${GPG_TEST_PREFIX}_DEC')\""
 CMD_ERR=$?
 if [ "$CMD_ERR" = "0" ]; then 
   cleanup_gpgtest
