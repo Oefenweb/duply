@@ -33,8 +33,15 @@
 #  - remove url_encode, test for invalid chars n throw error instead
 #
 #  CHANGELOG:
+#  2.5.0 (25.09.2023)
+#  - check for duplicity 2.1+ (2.0 broke implied commands), 
+#    command line ui changed incompatibly
+#  - filter in/excludes more strictly for mor duplicity commands now
+#  - replace '--file-to-restore' with '--path-to-restore'
+#  - filter backup only params now
+#
 #  2.4.3 (05.05.2023)
-#  - bugfix #134: workaround bash 4.2 and earlier read bug
+#  - bugfix #134: workaround bash 4.2 and earlier read bug (thx Tavio Wong)
 #
 #  2.4.2 (19.01.2023)
 #  - featreq #55: change to purgeAuto in systemd unit files (thx B.Foresman)
@@ -539,7 +546,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.4.3"
+ME_VERSION="2.5.0"
 ME_WEBSITE="https://duply.net"
 
 # default config values
@@ -1177,7 +1184,7 @@ function duplicity_version_get {
 
   DUPL_VERSION_OUT=$($CMD --version)
   DUPL_VERSION=`echo $DUPL_VERSION_OUT | awk '/^duplicity /{print $2; exit;}'`
-  #DUPL_VERSION='0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
+  #DUPL_VERSION='1.2.3' #'0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
   DUPL_VERSION_VALUE=0
   DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
   if (match(v,/[^\.0-9]+[0-9]*$/)){
@@ -1202,8 +1209,12 @@ resulted in
 "
   elif [ $DUPL_VERSION_VALUE -le 404 ] && [ ${DUPL_VERSION_RC:-4} -lt 4 ]; then
     error "The installed version $DUPL_VERSION is incompatible with $ME_NAME v$ME_VERSION.
-You should upgrade your version of duplicity to at least v0.4.4RC4 or
+You should upgrade your version of $ME_NAME to at least v0.4.4RC4 or
 use the older ftplicity version 1.1.1 from $ME_WEBSITE."
+  elif [ $DUPL_VERSION_VALUE -le 20100 ] ; then
+    error "The installed version $DUPL_VERSION is incompatible with $ME_NAME v$ME_VERSION.
+You should upgrade your version of duplicity to at least v2.1.0 or
+use the older $ME_NAME version 2.4.3 from $ME_WEBSITE."
   fi
 }
 
@@ -1355,16 +1366,28 @@ DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR' \
 
 # function to filter the DUPL_PARAMS var from user conf
 function duplicity_params_conf {
+  local OUT="$DUPL_PARAMS"
   # reuse cmd var from main loop
-  ## in/exclude parameters are currently not supported on restores
-  if [ "$cmd" = "fetch" ] || [ "$cmd" = "restore" ] || [ "$cmd" = "status" ]; then
+  ## in/exclude parameters are currently not supported on 
+  ## cleanup, status (collection_status), list (list_current_files), purge* (remove_*), fetch/restore
+  case $cmd in
+    cleanup | status | list | purge* | restore | fetch )
     # filter exclude params from fetch/restore/status
-    eval "stripXcludes $DUPL_PARAMS"
-    return
-  fi
+    OUT="$(stripXcludes $OUT)"
+    ;;
+  esac
 
-  # nothing done, print unchanged
-  echo "$DUPL_PARAMS"
+  case $cmd in
+    bkp | incr | full )
+      # nothing to strip, we're backing up'
+    ;;
+    *)
+      OUT="$(stripBkpOnlyParams $OUT)"
+    ;;
+  esac
+
+  # print result
+  echo "$OUT"
 }
 
 # strip in/exclude parameters from param string
@@ -1375,15 +1398,40 @@ function stripXcludes {
       unset STRIPNEXT
       # strip the value of previous parameter
       continue
-    elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z]+)?$/{exit 0;}{exit 1;}'; then
+    elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z\-]+)?$/{exit 0;}{exit 1;}'; then
       # strips e.g. --include /foo/bar
       STRIPNEXT="yes"
       continue
-    elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z]+)?=/{exit 0;}{exit 1;}'; then
+    elif echo "$p" | awk '/^\-\-(in|ex)clude(\-[a-zA-Z\-]+)?=/{exit 0;}{exit 1;}'; then
       # strips e.g. --include=/foo/bar
       continue
     fi
-    
+
+    OUT="$OUT $(qw "$p")"
+  done
+  echo "$OUT"
+}
+
+# strip backup only parameters from param string
+function stripBkpOnlyParams {
+  local STRIPNEXT OUT;
+
+  for p in "$@"; do
+    if [ -n "$STRIPNEXT" ]; then
+      unset STRIPNEXT
+      # strip the value of previous parameter
+      continue
+    elif echo "$p" | awk '/^\-\-(allow-source-mismatch|asynchronous-upload|dry-run)$/{exit 0;}{exit 1;}'; then
+      continue
+    elif echo "$p" | awk '/^\-\-(volsize)$/{exit 0;}{exit 1;}'; then
+      # strips e.g. --volsize 100
+      STRIPNEXT="yes"
+      continue
+    elif echo "$p" | awk '/^\-\-volsize=/{exit 0;}{exit 1;}'; then
+      # strips e.g. --volsize=100
+      continue
+    fi
+
     OUT="$OUT $(qw "$p")"
   done
   echo "$OUT"
@@ -2605,11 +2653,11 @@ case "$(tolower $cmd)" in
     ( run_script "$script" )
     ;;
   'bkp')
-    duplify -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
+    duplify backup -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
   'incr')
-    duplify incr -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
+    duplify incremental -- "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
           "$SOURCE" "$BACKEND_URL"
     ;;
   'full')
@@ -2630,7 +2678,7 @@ case "$(tolower $cmd)" in
     Syntax is -> $ME <profile> verifyPath <rel_bkp_path> <local_path> [<age>]"
 
     duplify verify -- $TIME "${dupl_opts[@]}" $EXCLUDE_PARAM "$EXCLUDE" \
-          --file-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
+          --path-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
     ;;
   'list')
     # time param exists since 0.5.10+
@@ -2667,20 +2715,19 @@ case "$(tolower $cmd)" in
   
   Hint: 
     Syntax is -> $ME <profile> restore <target_path> [<age>]"
-    
-    duplify  -- -t "$TIME" "${dupl_opts[@]}" "$BACKEND_URL" "$OUT_PATH"
+
+    duplify restore -- -t "$TIME" "${dupl_opts[@]}" "$BACKEND_URL" "$OUT_PATH"
     ;;
   'fetch')
     IN_PATH="${ftpl_pars[0]}"; OUT_PATH="${ftpl_pars[1]}"; 
     TIME="${ftpl_pars[2]:-now}";
     ( [ -z "$IN_PATH" ] || [ -z "$OUT_PATH" ] ) && error "  Missing parameter <src_path> or <target_path> for fetch.
-  
+
   Hint: 
     Syntax is -> $ME <profile> fetch <src_path> <target_path> [<age>]"
-    
-    # duplicity 0.4.7 doesnt like cmd restore in combination with --file-to-restore
-    duplify -- --restore-time "$TIME" "${dupl_opts[@]}" \
-              --file-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
+
+    duplify restore -- --restore-time "$TIME" "${dupl_opts[@]}" \
+              --path-to-restore "$IN_PATH" "$BACKEND_URL" "$OUT_PATH"
     ;;
   'status')
     duplify collection-status -- "${dupl_opts[@]}" "$BACKEND_URL"
