@@ -9,7 +9,7 @@
 #  changed from ftplicity to duply.                                            #
 #  See http://duply.net or http://ftplicity.sourceforge.net/ for more info.    #
 #  (c) 2006 Christiane Ruetten, Heise Zeitschriften Verlag, Germany            #
-#  (c) 2008-2022 Edgar Soldin (changes since version 1.3)                      #
+#  (c) 2008-2023 Edgar Soldin (changes since version 1.3)                      #
 ################################################################################
 #  LICENSE:                                                                    #
 #  This program is licensed under GPLv2.                                       #
@@ -33,10 +33,17 @@
 #  - remove url_encode, test for invalid chars n throw error instead
 #
 #  CHANGELOG:
+#  2.5.1 (4.10.2023)
+#  - quotewrap only strings with quotes ('") or spaces from now on
+#  - add --verbosity only if set in profile conf
+#  - bugfix #138: fix quoting when filtering params, thx Eric
+#  - bugfix #137: relax version parsing regex
+#
 #  2.5.0 (25.09.2023)
-#  - check for duplicity 2.1+ (2.0 broke implied commands), 
+#  - bugfix #136: "not compatible with duplicity 2.x", thx tengel, lds, Rhomeo
+#    check for duplicity 2.1+ (2.0 broke implied commands), 
 #    command line ui changed incompatibly
-#  - filter in/excludes more strictly for mor duplicity commands now
+#  - filter in/excludes more strictly for more duplicity actions now
 #  - replace '--file-to-restore' with '--path-to-restore'
 #  - filter backup only params now
 #
@@ -546,7 +553,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.5.0"
+ME_VERSION="2.5.1"
 ME_WEBSITE="https://duply.net"
 
 # default config values
@@ -1183,7 +1190,7 @@ function duplicity_version_get {
     CMD="$PYTHON $(qw "$(which duplicity)")"
 
   DUPL_VERSION_OUT=$($CMD --version)
-  DUPL_VERSION=`echo $DUPL_VERSION_OUT | awk '/^duplicity /{print $2; exit;}'`
+  DUPL_VERSION=$(echo $DUPL_VERSION_OUT | awk '/^duplicity/{print $2; exit;}')
   #DUPL_VERSION='1.2.3' #'0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
   DUPL_VERSION_VALUE=0
   DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
@@ -1307,12 +1314,12 @@ function run_cmd {
   return $CMD_ERR
 }
 
-function qw { quotewrap "$@"; }
+function qw { quotewrap $@; }
 
 function quotewrap {
   local param="$@"
   # quote strings having non word chars (e.g. spaces)
-  if echo "$param"  | awk '/[^A-Za-z0-9_\.\-\/]/{exit 0}{exit 1}'; then
+  if echo "$param" | awk '/[\047\042 ]/{exit 0}{exit 1}'; then
     echo "$param" | awk '{\
       gsub(/[\047]/,"\047\\\047\047",$0);\
       gsub(/[\042]/,"\047\\\042\047",$0);\
@@ -1356,11 +1363,11 @@ function duplicity_params_global {
     fi
   fi
 
-DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC} \
-${DUPL_PARAM_SIGN} --verbosity '${VERBOSITY:-4}' \
+DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC}\
+ ${DUPL_PARAM_SIGN} ${VERBOSITY:+--verbosity $VERBOSITY}\
  ${GPG_OPTS}"
 
-DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR' \
+DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR'\
  ${DUPL_ARG_ENC}"
 }
 
@@ -1372,8 +1379,8 @@ function duplicity_params_conf {
   ## cleanup, status (collection_status), list (list_current_files), purge* (remove_*), fetch/restore
   case $cmd in
     cleanup | status | list | purge* | restore | fetch )
-    # filter exclude params from fetch/restore/status
-    OUT="$(stripXcludes $OUT)"
+      # filter exclude params from fetch/restore/status
+      OUT=$(eval stripXcludes $OUT)
     ;;
   esac
 
@@ -1382,7 +1389,7 @@ function duplicity_params_conf {
       # nothing to strip, we're backing up'
     ;;
     *)
-      OUT="$(stripBkpOnlyParams $OUT)"
+      OUT=$(eval stripBkpOnlyParams $OUT)
     ;;
   esac
 
@@ -1394,6 +1401,7 @@ function duplicity_params_conf {
 function stripXcludes {
   local STRIPNEXT OUT;
   for p in "$@"; do
+    #echo "calc =$p="
     if [ -n "$STRIPNEXT" ]; then
       unset STRIPNEXT
       # strip the value of previous parameter
@@ -1467,8 +1475,8 @@ function duplify { # the actual wrapper function
     CMD="$PYTHON $(qw "$(which duplicity)")"
 
 $RUN "${DUPL_VARS_GLOBAL} ${BACKEND_PARAMS}\
-  ${DUPL_PRECMD} $CMD $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
-  $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS"
+ ${DUPL_PRECMD} $CMD $DUPL_CMD $DUPL_PARAMS_GLOBAL $(duplicity_params_conf)\
+ $GPG_USEAGENT $(gpg_custom_binary) $DUPL_CMD_PARAMS"
 
   local ERR=$?
   return $ERR
@@ -2312,9 +2320,9 @@ fi
 
 
 # get volsize, default duplicity volume size is 25MB since v0.5.07
-VOLSIZE=${VOLSIZE:-25}
+#VOLSIZE=${VOLSIZE:-25}
 # double if asynch is on
-echo $@ $DUPL_PARAMS | grep -q -e '--asynchronous-upload' && FACTOR=2 || FACTOR=1
+#echo $@ $DUPL_PARAMS | grep -q -e '--asynchronous-upload' && FACTOR=2 || FACTOR=1
 
 # TODO: check for enough (async= upload space and WARN only
 #       use function tmp_space 
