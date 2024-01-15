@@ -33,6 +33,9 @@
 #  - remove url_encode, test for invalid chars n throw error instead
 #
 #  CHANGELOG:
+#  2.5.2 (30.11.2023)
+#  - bug #139: "ampersand (&) in gpg passphrase breaks gpg tests"
+#
 #  2.5.1 (4.10.2023)
 #  - quotewrap only strings with quotes ('") or spaces from now on
 #  - add --verbosity only if set in profile conf
@@ -553,7 +556,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename $0)"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.5.1"
+ME_VERSION="2.5.2"
 ME_WEBSITE="https://duply.net"
 
 # default config values
@@ -1319,7 +1322,7 @@ function qw { quotewrap $@; }
 function quotewrap {
   local param="$@"
   # quote strings having non word chars (e.g. spaces)
-  if echo "$param" | awk '/[\047\042 ]/{exit 0}{exit 1}'; then
+  if echo "$param" | awk '/[^a-zA-Z0-9,\._\+\-@%\/]/{exit 0}{exit 1}'; then
     echo "$param" | awk '{\
       gsub(/[\047]/,"\047\\\047\047",$0);\
       gsub(/[\042]/,"\047\\\042\047",$0);\
