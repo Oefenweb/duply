@@ -33,11 +33,18 @@
 #  - remove url_encode, test for invalid chars n throw error instead
 #
 #  CHANGELOG:
+#  2.5.4 (1.1.2025)
+#  - bugfix #142: batch cmds with consecutive '_' fail, (hx Dominik Sommer
+#  - allow undocumented space separated batch cmd list e.g. "pre bkp post"
+#  - fix mawk incompatibility in gpg version detection
+#  - fix and/or conditions skipped one too many commands
+#  - simplify batch command parsing, remove superfluous 'read -ra'
+#
 #  2.5.3 (10.7.2024)
 #  - bugfix #140,141: "GPG_OPTS broken"
-#      see also https://duplicity.us/stable/duplicity.1.html#argparse-problem
+#    see also https://duplicity.us/stable/duplicity.1.html#argparse-problem
 #  - detect gpg version and add '--pinentry-mode loopback' as duplicity does
-#    no need to it manually in GPG_OPTS anymore
+#    no need to add it manually in GPG_OPTS anymore
 #
 #  2.5.2 (30.11.2023)
 #  - bugfix #139: "ampersand (&) in gpg passphrase breaks gpg tests"
@@ -560,9 +567,9 @@ function lookup {
 # important definitions #######################################################
 
 ME_LONG="$0"
-ME="$(basename $0)"
+ME="$(basename "$0")"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.5.3"
+ME_VERSION="2.5.4"
 ME_WEBSITE="https://duply.net"
 
 # default config values
@@ -1918,8 +1925,8 @@ function gpg_version_compare {
   }
   GPGVERSION=( ${GPGVERSION//./ } )
 
-  CMPIN=$( awk '{sub(/[+\-]*$/,"");print}' <<< "$1" )
-  CMPMODE=$( awk '{mode="-eq"}/-$/{mode="-le"}/+$/{mode="-ge"}{print mode;exit}' <<< "$1")
+  CMPIN=$( awk '{sub(/[\+\-]*$/,"");print}' <<< "$1" )
+  CMPMODE=$( awk '{mode="-eq"}/-$/{mode="-le"}/\+$/{mode="-ge"}{print mode;exit}' <<< "$1")
   CMPVERSION=( ${CMPIN//./ } )
 
   #echo ${GPGVERSION[@]} "/" ${CMPVERSION[@]} "/" $CMPMODE
@@ -2124,7 +2131,7 @@ eval "${TARGET_SPLIT_URL}"
 cmds="$2"; shift 2
 
 # complain if command(s) missing
-[ -z $cmds ] && error "  No command given.
+[ -z "$cmds" ] && error "  No command given.
 
   Hint:
     Use '$ME usage' to get usage help."
@@ -2555,22 +2562,22 @@ EXCLUDE="$EXCLUDE"
 # since 0.7.03 --exclude-globbing-filelist is deprecated
 EXCLUDE_PARAM="--exclude$(duplicity_version_lt 703 && echo -globbing)-filelist"
 
-# replace magic separators to command equivalents (+=and,-=or,[=groupIn,]=groupOut)
+# replace
+# - magic separators to command equivalents (+=and,-=or,[=groupIn,]=groupOut)
+# - multiple separator chars '_ ' with a single ' '
 cmds=$(awk -v cmds="$cmds" "BEGIN{ \
-  gsub(/\+/,\"_and_\",cmds);\
-  gsub(/\-/,\"_or_\",cmds);\
-  gsub(/\[/,\"_groupIn_\",cmds);\
-  gsub(/\]/,\"_groupOut_\",cmds);\
+  gsub(/\+/,\" and \",cmds);\
+  gsub(/\-/,\" or \",cmds);\
+  gsub(/\[/,\" groupIn \",cmds);\
+  gsub(/\]/,\" groupOut \",cmds);\
+  gsub(/[_ ]+/,\" \",cmds);\
   print cmds}")
-
-# split commands by '_', preserve spaces even if not allowed :)
-IFS='_' read -ra CMDS_IN <<< "$(tolower "$cmds")"
 
 # convert cmds to array,
 # post process, translate batch commands
 # ATTENTION: commands are lowercase from here on out
 declare -a CMDS
-for cmd in "${CMDS_IN[@]}"; do
+for cmd in $(tolower "$cmds"); do
   case "$cmd" in
     # backup -> [pre_bkp_post]
     'backup')
@@ -2680,14 +2687,10 @@ if var_isset 'CMD_SKIP' && [ $CMD_SKIP -gt 0 ]; then
   SKIP_NOW="yes"
 elif ! var_isset 'PREVIEW' && [ "$cmd" == 'and' ] && [ "$CMD_ERR" -ne "0" ]; then
   CMD_SKIP=$(get_cmd_skip_count)
-  # incl. this "cmd"
-  CMD_SKIP=$(( $CMD_SKIP + 1 ))
   unset CMD_SKIPPED
   SKIP_NOW="yes"
 elif ! var_isset 'PREVIEW' && [ "$cmd" == 'or' ] && [ "$CMD_ERR" -eq "0" ]; then
   CMD_SKIP=$(get_cmd_skip_count)
-  # incl. this "cmd"
-  CMD_SKIP=$(( $CMD_SKIP + 1 ))
   unset CMD_SKIPPED
   SKIP_NOW="yes"
 elif is_condition "$cmd" || is_groupMarker "$cmd"; then
