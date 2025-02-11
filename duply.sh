@@ -1203,7 +1203,7 @@ function duplicity_version_get {
   [ -n "$PYTHON" ] &&\
     CMD="$PYTHON $(qw "$(which duplicity)")"
 
-  DUPL_VERSION_OUT=$($CMD --version)
+  DUPL_VERSION_OUT=$($CMD --version | tail -1)
   DUPL_VERSION=$(echo $DUPL_VERSION_OUT | awk '/^duplicity/{print $2; exit;}')
   #DUPL_VERSION='1.2.3' #'0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
   DUPL_VERSION_VALUE=0
