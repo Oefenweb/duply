@@ -33,7 +33,11 @@
 #  - remove url_encode, test for invalid chars n throw error instead
 #
 #  CHANGELOG:
-#  2.5.4 (1.1.2025)
+#  2.5.5 (2025-02-11)
+#  - bugfix #143: parse duplicity 3.0.4 version fails (thx Mischa ter Smitten)
+#  - clean out some compatibility code with ancient duplicity versions
+#
+#  2.5.4 (2025-01-01)
 #  - bugfix #142: batch cmds with consecutive '_' fail, (hx Dominik Sommer
 #  - allow undocumented space separated batch cmd list e.g. "pre bkp post"
 #  - fix mawk incompatibility in gpg version detection
@@ -569,7 +573,7 @@ function lookup {
 ME_LONG="$0"
 ME="$(basename "$0")"
 ME_NAME="${ME%%.*}"
-ME_VERSION="2.5.4"
+ME_VERSION="2.5.5"
 ME_WEBSITE="https://duply.net"
 
 # default config values
@@ -1203,8 +1207,9 @@ function duplicity_version_get {
   [ -n "$PYTHON" ] &&\
     CMD="$PYTHON $(qw "$(which duplicity)")"
 
-  DUPL_VERSION_OUT=$($CMD --version | tail -1)
-  DUPL_VERSION=$(echo $DUPL_VERSION_OUT | awk '/^duplicity/{print $2; exit;}')
+  DUPL_VERSION_OUT=$($CMD --version)
+  # keep "$DUPL_VERSION_OUT" in quotes to maintain line breaks of output
+  DUPL_VERSION=$(echo "$DUPL_VERSION_OUT" | awk '/^duplicity +/{print $2; exit;}')
   #DUPL_VERSION='1.2.3' #'0.7.03' #'0.6.08b' #,0.4.4.RC4,0.6.08b
   DUPL_VERSION_VALUE=0
   DUPL_VERSION_AWK=$(awk -v v="$DUPL_VERSION" 'BEGIN{
@@ -1224,7 +1229,7 @@ function duplicity_version_get {
   if [ $DUPL_VERSION_VALUE -eq 0 ]; then
     inform "duplicity version check failed (please report, this is a bug)
 the command
-  $CMD
+  $CMD --version
 resulted in
   $DUPL_VERSION_OUT
 "
@@ -1239,12 +1244,16 @@ use the older $ME_NAME version 2.4.3 from $ME_WEBSITE."
   fi
 }
 
+function duplicity_version_isvalid {
+  awk '!/^[0-9]+$/{exit 1}' <<< "$DUPL_VERSION_VALUE" && [ "$DUPL_VERSION_VALUE" -gt 0 ]
+}
+
 function duplicity_version_ge {
-  [ "$DUPL_VERSION_VALUE" -ge "$1" ]
+  duplicity_version_isvalid && [ "$DUPL_VERSION_VALUE" -ge "$1" ]
 }
 
 function duplicity_version_lt {
-  ! duplicity_version_ge "$1"
+  duplicity_version_isvalid && ! duplicity_version_ge "$1"
 }
 
 # parse interpreter from duplicity shebang
@@ -1363,26 +1372,24 @@ function duplicity_params_global {
   local GPG_OPTS=${GPG_OPTS:+"--gpg-options=$(qw "${GPG_OPTS}")"}
 
   # set name for dupl archive folder, since 0.6.0
-  if duplicity_version_ge 601; then
-    local DUPL_ARCHDIR=''
-    if var_isset 'ARCH_DIR'; then
-      DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
-      # reuse erronously duply_ prefixed folders from bug #117
-      if [ -d "$ARCH_DIR/duply_${PROFILE}" ]; then
-        DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
-      else
-        DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "${PROFILE}")"
-      fi
+  local DUPL_ARCHDIR=''
+  if var_isset 'ARCH_DIR'; then
+    DUPL_ARCHDIR="--archive-dir $(qw "${ARCH_DIR}")"
+    # reuse erronously duply_ prefixed folders from bug #117
+    if [ -d "$ARCH_DIR/duply_${PROFILE}" ]; then
+      DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "duply_${PROFILE}")"
     else
-      DUPL_ARCHDIR="--name $(qw "duply_${PROFILE}")"
+      DUPL_ARCHDIR="${DUPL_ARCHDIR} --name $(qw "${PROFILE}")"
     fi
+  else
+    DUPL_ARCHDIR="--name $(qw "duply_${PROFILE}")"
   fi
 
-DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC}\
+  DUPL_PARAMS_GLOBAL="${DUPL_ARCHDIR} ${DUPL_PARAM_ENC}\
  ${DUPL_PARAM_SIGN} ${VERBOSITY:+--verbosity $VERBOSITY}\
  ${GPG_OPTS}"
 
-DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR'\
+  DUPL_VARS_GLOBAL="TMPDIR='$TEMP_DIR'\
  ${DUPL_ARG_ENC}"
 }
 
@@ -2520,16 +2527,6 @@ Will use default which is probably rackspace."
        warning "\
 Swift will probably fail because the conf var SWIFT_AUTHURL was not exported!"
     ;;
-  'rsync')
-    # everything in url (this backend does not support pass in env var)
-    # this is obsolete from version 0.6.10 (buggy), hopefully fixed in 0.6.11
-    # print warning older version is detected
-    duplicity_version_lt 610 &&
-      warning "\
-Duplicity version '$DUPL_VERSION' does not support providing the password as
-env var for rsync backend. For security reasons you should consider to
-update to a version greater than '0.6.10' of duplicity."
-    ;;
 esac
 
 
@@ -2559,8 +2556,7 @@ fi
 SOURCE="$SOURCE"
 BACKEND_URL="$BACKEND_URL"
 EXCLUDE="$EXCLUDE"
-# since 0.7.03 --exclude-globbing-filelist is deprecated
-EXCLUDE_PARAM="--exclude$(duplicity_version_lt 703 && echo -globbing)-filelist"
+EXCLUDE_PARAM="--exclude-filelist"
 
 # replace
 # - magic separators to command equivalents (+=and,-=or,[=groupIn,]=groupOut)
